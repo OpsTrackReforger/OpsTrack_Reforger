@@ -1,9 +1,12 @@
 class ConnectionEventSender : ApiClient
 {
-    void ConnectionEventSender(string baseUrl)
+
+	
+    void ConnectionEventSender()
     {
+		super.settings = OpsTrackManager.Get().GetSettings();
         // kalder base constructor
-        ApiClient(baseUrl);
+        ApiClient();
 		super.m_Callback = new OpsTrackCallback();
 
     }
@@ -18,7 +21,7 @@ class ConnectionEventSender : ApiClient
         string uid = GetGame().GetBackendApi().GetPlayerIdentityId(playerId);
         string name = GetGame().GetPlayerManager().GetPlayerName(playerId);
 
-        if (uid == "" && attempt < 20)
+        if (uid == "" && attempt < settings.MaxRetries)
         {
             GetGame().GetCallqueue().CallLater(SendWithRetry, 100, false, playerId, eventType, attempt + 1);
             return;

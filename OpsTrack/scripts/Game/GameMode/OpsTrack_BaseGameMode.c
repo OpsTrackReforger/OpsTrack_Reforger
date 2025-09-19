@@ -12,7 +12,9 @@ modded class SCR_BaseGameMode
 		
 		if(Replication.IsServer()) //Using IsServer because we only want it to happen when it is a server.
 		{
-			m_ConnectionEvents = new ConnectionEventSender("http://91.226.144.240:5050");
+			OpsTrackSettings settings = OpsTrackManager.Get().GetSettings();
+			
+			m_ConnectionEvents = new ConnectionEventSender();
 			Print("[OpsTrack] Mod is running on the server!");
 		}
 	}

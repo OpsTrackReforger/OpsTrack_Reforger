@@ -2,11 +2,12 @@ class ApiClient
 {
     protected RestContext m_Context;
 	protected ref OpsTrackCallback m_Callback;
-
-    void ApiClient(string baseUrl)
+	protected ref OpsTrackSettings settings;
+    void ApiClient()
     {
+		settings = OpsTrackManager.Get().GetSettings();
         RestApi restApi = GetGame().GetRestApi();
-        m_Context = restApi.GetContext(baseUrl);
+        m_Context = restApi.GetContext(settings.ApiBaseUrl);
         m_Context.SetHeaders("Content-Type,application/json");
 		m_Callback = new OpsTrackCallback();
     }
