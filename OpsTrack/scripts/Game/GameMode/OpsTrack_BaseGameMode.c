@@ -31,6 +31,8 @@ modded class SCR_BaseGameMode
 	
 	override void OnPlayerDisconnected(int playerId, KickCauseCode cause, int timeout)
 	{
+	
+		
 		if(m_ConnectionEvents)
 		{
 			m_ConnectionEvents.SendLeave(playerId);
@@ -38,7 +40,6 @@ modded class SCR_BaseGameMode
 		
 		super.OnPlayerDisconnected(playerId, cause, timeout); //Runn as last thing, so it doesnt dispose the data above methods need.
 	}
-	
 	
 //	
 //    void SendJoinEvent(int playerId, int attempt = 0)

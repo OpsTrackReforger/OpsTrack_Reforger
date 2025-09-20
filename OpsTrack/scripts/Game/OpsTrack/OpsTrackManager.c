@@ -5,13 +5,17 @@ class OpsTrackManager
     private ref OpsTrackSettings m_Settings;
     private const string SETTINGS_PATH = "$profile:OpsTrackSettings.json";
 
+	private void OpsTrackManager()
+	{
+		m_Settings = OpsTrackSettings.Get();
+		LoadOrCreate();
+	}
 
     static OpsTrackManager Get()
     {
         if (!s_Instance) {
             s_Instance = new OpsTrackManager();
 			Print("[OpsTrack] Manager initialized on server!");
-            s_Instance.LoadOrCreate();
 			
         }
         return s_Instance;
@@ -21,10 +25,16 @@ class OpsTrackManager
     {
         return m_Settings;
     }
+	
+	void Reload()
+	{
+		LoadOrCreate();
+		Print("[OpsTrack] Settings reloaded at runtime");
+
+	}
 
 	private void LoadOrCreate()
 	{
-	    m_Settings = new OpsTrackSettings();
 	
 	    SCR_JsonLoadContext loadCtx = new SCR_JsonLoadContext();
 	    if (loadCtx.LoadFromFile(SETTINGS_PATH)) {
