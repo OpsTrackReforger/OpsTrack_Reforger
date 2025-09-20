@@ -22,23 +22,34 @@ class OpsTrackManager
         return m_Settings;
     }
 
-    private void LoadOrCreate()
-    {
-        m_Settings = new OpsTrackSettings();
+	private void LoadOrCreate()
+	{
+	    m_Settings = new OpsTrackSettings();
+	
+	    SCR_JsonLoadContext loadCtx = new SCR_JsonLoadContext();
+	    if (loadCtx.LoadFromFile(SETTINGS_PATH)) {
+	        m_Settings.Load(loadCtx);
+	        Print("[OpsTrack] Settings loaded from " + SETTINGS_PATH);
+	        return;
+	    }
+	
+	    // --- Pretty save branch ---
+	    PrettyJsonSaveContainer pretty = new PrettyJsonSaveContainer();
+	    pretty.SetFormatOptions(EPrettyFormatOptions.FormatDefault);
+	    pretty.SetIndent(" ", 4);
+	
+	    SCR_JsonSaveContext saveCtx = new SCR_JsonSaveContext(false);
+	    saveCtx.SetContainer(pretty);
+	
+	    m_Settings.Save(saveCtx);
+	
+	    if (pretty.SaveToFile(SETTINGS_PATH)) {
+	        Print("[OpsTrack] No settings file found. Created default (pretty) at " + SETTINGS_PATH);
+	    } else {
+	        Print("[OpsTrack] Failed to save default settings!");
+	    }
+	}
+	
 
-        SCR_JsonLoadContext loadCtx = new SCR_JsonLoadContext();
-        if (loadCtx.LoadFromFile(SETTINGS_PATH)) {
-            m_Settings.Load(loadCtx);
-            Print("[OpsTrack] Settings loaded from " + SETTINGS_PATH);
-            return;
-        }
 
-        SCR_JsonSaveContext saveCtx = new SCR_JsonSaveContext();
-        m_Settings.Save(saveCtx);
-        if (saveCtx.SaveToFile(SETTINGS_PATH)) {
-            Print("[OpsTrack] No settings file found. Created default at " + SETTINGS_PATH);
-        } else {
-            Print("[OpsTrack] Failed to save default settings!");
-        }
-    }
 }
