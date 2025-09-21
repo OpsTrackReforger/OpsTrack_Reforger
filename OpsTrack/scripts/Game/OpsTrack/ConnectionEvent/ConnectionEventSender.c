@@ -1,10 +1,9 @@
-// ConnectionEventSender.c
 class ConnectionEventSender : ApiClient
 {
     void ConnectionEventSender()
     {
-        // Parent ctor initialiserer settings, m_Context og default m_Callback
-        // Hvis du vil have en specifik callback, kan du overskrive her:
+        // Parent constructor initializes settings, m_Context and default m_Callback
+        // If you want a specific callback, you can override here:
         // m_Callback = new OpsTrackCallback();
     }
 
@@ -15,11 +14,11 @@ class ConnectionEventSender : ApiClient
 
     protected void SendWithRetry(int playerId, string eventType, int attempt = 0)
     {
-        // Lazy guard: sikr at settings er sat
+        // Ensure settings are available
         if (!settings) {
             settings = OpsTrackManager.Get().GetSettings();
             if (!settings) {
-                Print("[OpsTrack] ERROR: Settings not available in ConnectionEventSender");
+                OpsTrackLogger.Error("Settings not available in ConnectionEventSender.");
                 return;
             }
         }
@@ -27,20 +26,28 @@ class ConnectionEventSender : ApiClient
         string uid = GetGame().GetBackendApi().GetPlayerIdentityId(playerId);
         string name = GetGame().GetPlayerManager().GetPlayerName(playerId);
 
-        if (uid == "" && attempt < settings.MaxRetries)
-        {
+        // Retry until identity is available or max retries reached
+        if (uid == "" && attempt < settings.MaxRetries) {
             GetGame().GetCallqueue().CallLater(SendWithRetry, 100, false, playerId, eventType, attempt + 1);
             return;
         }
 
-        if (uid == "")
-        {
-            Print(string.Format("[OpsTrack] Gave up waiting for identity for player %1 after %2 attempts", playerId, attempt));
+        if (uid == "") {
+            OpsTrackLogger.Warn(string.Format(
+                "Gave up waiting for identity for player %1 after %2 attempts.",
+                playerId, attempt
+            ));
             return;
         }
 
         string json = BuildPayload(uid, name, eventType);
         string endpoint = "/player/" + eventType;
+
+        OpsTrackLogger.Info(string.Format(
+            "Sending '%1' event for player '%2' (ID: %3, UID: %4).",
+            eventType, name, playerId, uid
+        ));
+
         Post(endpoint, json);
     }
 

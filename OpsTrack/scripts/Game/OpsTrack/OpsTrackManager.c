@@ -3,20 +3,30 @@ class OpsTrackManager
     private static ref OpsTrackManager s_Instance;
     private ref OpsTrackSettings m_Settings;
     private const string SETTINGS_PATH = "$profile:OpsTrackSettings.json";
+    private static bool s_Initialized = false;
 
-    private void OpsTrackManager()
-    {
-        LoadOrCreate();
-    }
+	private void OpsTrackManager()
+	{
+
+	}
+
 
     static OpsTrackManager Get()
     {
+		//Instantiation runs here instead of constructor to avoid multiple constructors running at the same time.
         if (!s_Instance) {
             s_Instance = new OpsTrackManager();
-            Print("[OpsTrack] Manager initialized on server!");
+
+            if (!s_Initialized) {
+                s_Instance.LoadOrCreate();
+                OpsTrackLogger.Info("OpsTrack Manager initialized on server.");
+                s_Initialized = true;
+            }
         }
         return s_Instance;
     }
+
+
 
     OpsTrackSettings GetSettings()
     {
@@ -26,52 +36,51 @@ class OpsTrackManager
     void Reload()
     {
         LoadOrCreate();
-        Print("[OpsTrack] Settings reloaded at runtime");
+        OpsTrackLogger.Info("Settings reloaded at runtime.");
     }
 
-	private void LoadOrCreate()
-	{
-	    SCR_JsonLoadContext loadCtx = new SCR_JsonLoadContext();
-	    if (loadCtx.LoadFromFile(SETTINGS_PATH)) {
-	        m_Settings = new OpsTrackSettings();
-	        if (m_Settings.Load(loadCtx)) {
-	            Print("[OpsTrack] Settings loaded from " + SETTINGS_PATH);
-	
-	            // Resave for at sikre at nye felter (fx TestField) bliver skrevet ud
-	            SavePretty();
-	            return;
-	        } else {
-	            Print("[OpsTrack] Failed to parse settings file, falling back to defaults");
-	        }
-	    }
-	
-	    // --- Fallback til defaults ---
-	    m_Settings = new OpsTrackSettings();
-	    SavePretty();
-	    Print("[OpsTrack] No settings file found. Created default (pretty) at " + SETTINGS_PATH);
-	}
+    private void LoadOrCreate()
+    {
+        SCR_JsonLoadContext loadCtx = new SCR_JsonLoadContext();
+        if (loadCtx.LoadFromFile(SETTINGS_PATH)) {
+            m_Settings = new OpsTrackSettings();
+            if (m_Settings.Load(loadCtx)) {
+                OpsTrackLogger.Info("Settings loaded from " + SETTINGS_PATH);
 
-	private void SavePretty()
-	{
-	    if (!m_Settings) {
-	        Print("[OpsTrack] ERROR: Tried to save settings but m_Settings is null!");
-	        return;
-	    }
-	
-	    PrettyJsonSaveContainer pretty = new PrettyJsonSaveContainer();
-	    pretty.SetFormatOptions(EPrettyFormatOptions.FormatDefault);
-	    pretty.SetIndent(" ", 4);
-	
-	    SCR_JsonSaveContext saveCtx = new SCR_JsonSaveContext(false);
-	    saveCtx.SetContainer(pretty);
-	
-	    m_Settings.Save(saveCtx);
-	
-	    if (pretty.SaveToFile(SETTINGS_PATH)) {
-	        Print("[OpsTrack] Settings saved to " + SETTINGS_PATH);
-	    } else {
-	        Print("[OpsTrack] Failed to save settings!");
-	    }
-	}
+                // Optional: only resave if you want to auto‑write new fields
+                // SavePretty();
+                return;
+            } else {
+                OpsTrackLogger.Warn("Failed to parse settings file. Falling back to defaults.");
+            }
+        }
 
+        // --- Fallback to defaults ---
+        m_Settings = new OpsTrackSettings();
+        SavePretty();
+        OpsTrackLogger.Warn("No settings file found. Created default settings at " + SETTINGS_PATH);
+    }
+
+    private void SavePretty()
+    {
+        if (!m_Settings) {
+            OpsTrackLogger.Error("Tried to save settings but m_Settings is null!");
+            return;
+        }
+
+        PrettyJsonSaveContainer pretty = new PrettyJsonSaveContainer();
+        pretty.SetFormatOptions(EPrettyFormatOptions.FormatDefault);
+        pretty.SetIndent(" ", 4);
+
+        SCR_JsonSaveContext saveCtx = new SCR_JsonSaveContext(false);
+        saveCtx.SetContainer(pretty);
+
+        m_Settings.Save(saveCtx);
+
+        if (pretty.SaveToFile(SETTINGS_PATH)) {
+            OpsTrackLogger.Info("Settings saved to " + SETTINGS_PATH);
+        } else {
+            OpsTrackLogger.Error("Failed to save settings to " + SETTINGS_PATH);
+        }
+    }
 }

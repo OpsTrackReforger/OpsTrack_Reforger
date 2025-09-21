@@ -2,17 +2,17 @@ class OpsTrackCallback : RestCallback
 {
     override void OnSuccess(string data, int dataSize)
     {
-        Print("[OpsTrack] Success, size=" + dataSize);
-        Print("[OpsTrack] Response: " + data);
+        OpsTrackLogger.Info("REST request succeeded. Response size = " + dataSize);
+        OpsTrackLogger.Debug("REST response body: " + data);
     }
 
     override void OnError(int errorCode)
     {
-        Print("[OpsTrack] Error code: " + errorCode);
+        OpsTrackLogger.Error("REST request failed with error code: " + errorCode);
     }
 
     override void OnTimeout()
     {
-        Print("[OpsTrack] Request timed out!");
+        OpsTrackLogger.Error("REST request timed out.");
     }
 }
