@@ -1,14 +1,11 @@
+// ConnectionEventSender.c
 class ConnectionEventSender : ApiClient
 {
-
-	
     void ConnectionEventSender()
     {
-		super.settings = OpsTrackManager.Get().GetSettings();
-        // kalder base constructor
-        ApiClient();
-		super.m_Callback = new OpsTrackCallback();
-
+        // Parent ctor initialiserer settings, m_Context og default m_Callback
+        // Hvis du vil have en specifik callback, kan du overskrive her:
+        // m_Callback = new OpsTrackCallback();
     }
 
     protected string BuildPayload(string uid, string name, string eventType)
@@ -16,8 +13,17 @@ class ConnectionEventSender : ApiClient
         return string.Format("{\"gameIdentity\":\"%1\",\"name\":\"%2\"}", uid, name);
     }
 
-	protected void SendWithRetry(int playerId, string eventType, int attempt = 0)
+    protected void SendWithRetry(int playerId, string eventType, int attempt = 0)
     {
+        // Lazy guard: sikr at settings er sat
+        if (!settings) {
+            settings = OpsTrackManager.Get().GetSettings();
+            if (!settings) {
+                Print("[OpsTrack] ERROR: Settings not available in ConnectionEventSender");
+                return;
+            }
+        }
+
         string uid = GetGame().GetBackendApi().GetPlayerIdentityId(playerId);
         string name = GetGame().GetPlayerManager().GetPlayerName(playerId);
 
@@ -34,21 +40,10 @@ class ConnectionEventSender : ApiClient
         }
 
         string json = BuildPayload(uid, name, eventType);
-
-		string endpoint = "/player/" + eventType;
+        string endpoint = "/player/" + eventType;
         Post(endpoint, json);
     }
 
-	
-    // Offentlige metoder
-    void SendJoin(int playerId)
-    {
-        SendWithRetry(playerId, "join");
-    }
-
-    void SendLeave(int playerId)
-    {
-        SendWithRetry(playerId, "leave");
-    }
-
+    void SendJoin(int playerId)  { SendWithRetry(playerId, "join");  }
+    void SendLeave(int playerId) { SendWithRetry(playerId, "leave"); }
 }
