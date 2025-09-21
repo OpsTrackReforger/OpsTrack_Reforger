@@ -5,7 +5,7 @@ class OpsTrackSettings : Managed
     bool EnableConnectionEvents;
     bool EnableKillEvents;
     int MaxRetries;
-	string TestField;
+	bool EnableDebug;
 
     // --- Ctor med defaults ---
     void OpsTrackSettings()
@@ -14,7 +14,7 @@ class OpsTrackSettings : Managed
         EnableConnectionEvents = true;
         EnableKillEvents = false;
         MaxRetries = 20;
-		TestField = "Test";
+		EnableDebug = false;
     }
 
     // --- Load/Save felter ---
@@ -27,7 +27,7 @@ class OpsTrackSettings : Managed
         if (ctx.ReadValue("EnableConnectionEvents", b)) EnableConnectionEvents = b;
         if (ctx.ReadValue("EnableKillEvents", b)) EnableKillEvents = b;
         if (ctx.ReadValue("MaxRetries", i)) MaxRetries = i;
-		if (ctx.ReadValue("TestField", s)) TestField = s;
+		if (ctx.ReadValue("EnableDebug", b)) EnableDebug = b;
 
         return true;
     }
@@ -39,6 +39,6 @@ class OpsTrackSettings : Managed
         ctx.WriteValue("EnableConnectionEvents", EnableConnectionEvents);
         ctx.WriteValue("EnableKillEvents", EnableKillEvents);
         ctx.WriteValue("MaxRetries", MaxRetries);
-		ctx.WriteValue("TestField", TestField);
+		ctx.WriteValue("EnableDebug", EnableDebug);
     }
 }

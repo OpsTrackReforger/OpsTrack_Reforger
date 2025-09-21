@@ -20,11 +20,12 @@ modded class SCR_BaseGameMode
             if (m_OpsTrackEnabled)
             {
                 m_ConnectionEvents = new ConnectionEventSender();
-                Print("[OpsTrack] Mod is running on the server! Connection events enabled.");
+                OpsTrackLogger.Info("Mod is running on the server! Connection events enabled.");
             }
             else
             {
-                Print("[OpsTrack] Mod is running on the server! Connection events disabled by settings.");
+                OpsTrackLogger.Info("Mod is running on the server! Connection events disabled by settings.");
+
             }
         }
     }
