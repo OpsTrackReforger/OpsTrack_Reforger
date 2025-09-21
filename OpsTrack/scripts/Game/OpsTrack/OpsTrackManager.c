@@ -29,35 +29,49 @@ class OpsTrackManager
         Print("[OpsTrack] Settings reloaded at runtime");
     }
 
-    private void LoadOrCreate()
-    {
-        SCR_JsonLoadContext loadCtx = new SCR_JsonLoadContext();
-        if (loadCtx.LoadFromFile(SETTINGS_PATH)) {
-            m_Settings = new OpsTrackSettings();
-            if (m_Settings.Load(loadCtx)) {
-                Print("[OpsTrack] Settings loaded from " + SETTINGS_PATH);
-                return;
-            } else {
-                Print("[OpsTrack] Failed to parse settings file, falling back to defaults");
-            }
-        }
+	private void LoadOrCreate()
+	{
+	    SCR_JsonLoadContext loadCtx = new SCR_JsonLoadContext();
+	    if (loadCtx.LoadFromFile(SETTINGS_PATH)) {
+	        m_Settings = new OpsTrackSettings();
+	        if (m_Settings.Load(loadCtx)) {
+	            Print("[OpsTrack] Settings loaded from " + SETTINGS_PATH);
+	
+	            // Resave for at sikre at nye felter (fx TestField) bliver skrevet ud
+	            SavePretty();
+	            return;
+	        } else {
+	            Print("[OpsTrack] Failed to parse settings file, falling back to defaults");
+	        }
+	    }
+	
+	    // --- Fallback til defaults ---
+	    m_Settings = new OpsTrackSettings();
+	    SavePretty();
+	    Print("[OpsTrack] No settings file found. Created default (pretty) at " + SETTINGS_PATH);
+	}
 
-        // --- Fallback til defaults ---
-        m_Settings = new OpsTrackSettings();
+	private void SavePretty()
+	{
+	    if (!m_Settings) {
+	        Print("[OpsTrack] ERROR: Tried to save settings but m_Settings is null!");
+	        return;
+	    }
+	
+	    PrettyJsonSaveContainer pretty = new PrettyJsonSaveContainer();
+	    pretty.SetFormatOptions(EPrettyFormatOptions.FormatDefault);
+	    pretty.SetIndent(" ", 4);
+	
+	    SCR_JsonSaveContext saveCtx = new SCR_JsonSaveContext(false);
+	    saveCtx.SetContainer(pretty);
+	
+	    m_Settings.Save(saveCtx);
+	
+	    if (pretty.SaveToFile(SETTINGS_PATH)) {
+	        Print("[OpsTrack] Settings saved to " + SETTINGS_PATH);
+	    } else {
+	        Print("[OpsTrack] Failed to save settings!");
+	    }
+	}
 
-        PrettyJsonSaveContainer pretty = new PrettyJsonSaveContainer();
-        pretty.SetFormatOptions(EPrettyFormatOptions.FormatDefault);
-        pretty.SetIndent(" ", 4);
-
-        SCR_JsonSaveContext saveCtx = new SCR_JsonSaveContext(false);
-        saveCtx.SetContainer(pretty);
-
-        m_Settings.Save(saveCtx);
-
-        if (pretty.SaveToFile(SETTINGS_PATH)) {
-            Print("[OpsTrack] No settings file found. Created default (pretty) at " + SETTINGS_PATH);
-        } else {
-            Print("[OpsTrack] Failed to save default settings!");
-        }
-    }
 }
