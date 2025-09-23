@@ -41,7 +41,7 @@ class ConnectionEventSender : ApiClient
         }
 
         string json = BuildPayload(uid, name, eventType);
-        string endpoint = "/player/" + eventType;
+        string endpoint = "/events/connections/" + eventType;
 
         OpsTrackLogger.Info(string.Format(
             "Sending '%1' event for player '%2' (ID: %3, UID: %4).",
