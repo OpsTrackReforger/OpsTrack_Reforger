@@ -9,7 +9,8 @@ class ApiClient
         settings = OpsTrackManager.Get().GetSettings();
         RestApi restApi = GetGame().GetRestApi();
         m_Context = restApi.GetContext(settings.ApiBaseUrl);
-        m_Context.SetHeaders("Content-Type,application/json");
+		m_Context.SetHeaders("Content-Type,application/json,X-Api-Key," + settings.ApiKey);
+
         m_Callback = new OpsTrackCallback();
     }
 

@@ -47,8 +47,7 @@ class OpsTrackManager
             if (m_Settings.Load(loadCtx)) {
                 OpsTrackLogger.Info("Settings loaded from " + SETTINGS_PATH);
 
-                // Optional: only resave if you want to auto‑write new fields
-                // SavePretty();
+                SavePretty();
                 return;
             } else {
                 OpsTrackLogger.Warn("Failed to parse settings file. Falling back to defaults.");
