@@ -1,3 +1,7 @@
+**Support**
+Join the discord: https://discord.gg/w9Gf3twcUn
+Or create an issue
+
 **Description**
 Opstrack_Reforger is the ArmA reforger mod that pushes data to the OpsTrack_API: https://github.com/OpsTrackReforger/OpsTrack_API
 
