@@ -19,7 +19,7 @@ modded class SCR_BaseGameMode
 
             if (m_OpsTrackEnabled)
             {
-                m_ConnectionEvents = new ConnectionEventSender();
+                m_ConnectionEvents = ConnectionEventSender.Get();
                 OpsTrackLogger.Info("Mod is running on the server! Connection events enabled.");
             }
             else
@@ -28,6 +28,7 @@ modded class SCR_BaseGameMode
 
             }
         }
+
     }
 
     override void OnPlayerRegistered(int playerId)
@@ -46,5 +47,5 @@ modded class SCR_BaseGameMode
         // Behold super til sidst som du allerede gør
         super.OnPlayerDisconnected(playerId, cause, timeout);
     }
-}
+}	
 

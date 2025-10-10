@@ -1,11 +1,23 @@
 class ConnectionEventSender : ApiClient
 {
-    void ConnectionEventSender()
+	private static ref ConnectionEventSender s_Instance;
+	
+	
+    private void ConnectionEventSender()
     {
         // Parent constructor initializes settings, m_Context and default m_Callback
         // If you want a specific callback, you can override here:
         // m_Callback = new OpsTrackCallback();
     }
+	
+	static ConnectionEventSender Get()
+	{
+		if(!s_Instance)
+		{
+			s_Instance = new ConnectionEventSender();
+		}
+		return s_Instance;
+	}
 
     protected string BuildPayload(string uid, string name, string eventType)
     {
