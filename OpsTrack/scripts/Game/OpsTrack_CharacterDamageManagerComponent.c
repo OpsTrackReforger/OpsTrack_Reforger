@@ -5,7 +5,7 @@ modded class SCR_CharacterDamageManagerComponent
 	
 	protected override void OnDamage(notnull BaseDamageContext damageContext)
 	{
-		if(!OpsTrackManager.Get().GetSettings().EnableKillEvents)
+		if(!OpsTrackManager.Get().GetSettings().EnableKillEvents && !Replication.IsServer())
 		{
 			super.OnDamage(damageContext);
 			return;
@@ -15,11 +15,11 @@ modded class SCR_CharacterDamageManagerComponent
 		Instigator instigator = damageContext.instigator;
 		IEntity actorEntity = instigator.GetInstigatorEntity();
 		IEntity victim = GetOwner();
-		SCR_FactionAffiliationComponent victimFaction = SCR_FactionAffiliationComponent.Cast(
-   			victim.FindComponent(SCR_FactionAffiliationComponent)
+		SCR_CharacterFactionAffiliationComponent victimFaction = SCR_CharacterFactionAffiliationComponent.Cast(
+   			victim.FindComponent(SCR_CharacterFactionAffiliationComponent)
 		);
-		SCR_FactionAffiliationComponent instigatorFaction = SCR_FactionAffiliationComponent.Cast(
-   			actorEntity.FindComponent(SCR_FactionAffiliationComponent)
+		SCR_CharacterFactionAffiliationComponent instigatorFaction = SCR_CharacterFactionAffiliationComponent.Cast(
+   			actorEntity.FindComponent(SCR_CharacterFactionAffiliationComponent)
 		);
 		
 		
@@ -51,9 +51,9 @@ modded class SCR_CharacterDamageManagerComponent
 		//resolve isBlueOnBlue
 		if(victimFaction && instigatorFaction)
 		{
-			string victimKey = victimFaction.GetAffiliatedFactionKey();
-			string instigatorKey = instigatorFaction.GetAffiliatedFactionKey();
-			if(victimKey == instigatorKey)
+			Faction faction1 = victimFaction.GetAffiliatedFaction();
+			Faction faction2 = instigatorFaction.GetAffiliatedFaction();
+			if(faction1.IsFactionFriendly(faction2))
 			{
 				isBlueOnBlue = true;
 			}
@@ -80,8 +80,9 @@ modded class SCR_CharacterDamageManagerComponent
 
         BaseWeaponComponent activeWeapon = weaponMgr.GetCurrentWeapon();
         if (!activeWeapon) return "Unknown";
-
-        return activeWeapon.GetUIInfo().GetName();
+		
+		UIInfo info = activeWeapon.GetUIInfo();
+        return info.GetName();
     }
 
 }
