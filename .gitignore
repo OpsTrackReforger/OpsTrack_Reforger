@@ -1,1 +1,14 @@
-OpsTrack/resourceDatabase.rdb
+# Reforger/Workbench genererede filer
+resourceDatabase.rdb
+
+# Alle filer der indeholder manifest.json i navnet
+*manifest.json*
+
+# Alle filer der indeholder ServerData.json i navnet
+*ServerData.json*
+
+# Alle pak‑filer (kompilerede mods)
+*.pak
+
+# Meta‑filer (meta.json, meta.db osv.)
+*meta*
