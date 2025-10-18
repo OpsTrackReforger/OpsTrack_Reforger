@@ -48,6 +48,20 @@ modded class SCR_CharacterDamageManagerComponent
 			distance = (int)vector.Distance(actorPos, victimPos);
 		}
 		
+		//resolve faction names
+		string actorFactionName = "Unknown";
+		if(instigatorFaction)
+		{
+			actorFactionName = instigatorFaction.GetAffiliatedFaction().GetFactionName();	
+		}
+		
+		string victimFactionName = "Unknown";
+		if(victimFaction)
+		{
+			victimFactionName = victimFaction.GetAffiliatedFaction().GetFactionName();
+		}
+		
+		
 		//resolve isBlueOnBlue
 		if(victimFaction && instigatorFaction)
 		{
@@ -60,8 +74,7 @@ modded class SCR_CharacterDamageManagerComponent
 		}
 
 		
-		
-		sender.SendWounded(actorId, victimId, weapon, isBlueOnBlue, distance);
+		sender.SendWounded(actorId, actorFactionName, victimId, victimFactionName, weapon, isBlueOnBlue, distance);
 		
 		super.OnDamage(damageContext);
 		
