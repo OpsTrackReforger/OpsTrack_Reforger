@@ -15,9 +15,9 @@ class CombatEventSender : ApiClient
     }
 
     // --- Public API ---
-    void SendWounded(int actorId, string actorFactionName, int victimId, string victimFactionName, string weapon, bool isBlueOnBlue, float distance)
+    void SendWounded(int actorId, string actorName, string actorFactionName, int victimId, string victimName, string victimFactionName, string weapon, bool isBlueOnBlue, float distance)
     {
-        SendCombatEvent(actorId, actorFactionName, victimId, victimFactionName, weapon, distance, isBlueOnBlue, 2); // 2 = Wounded
+        SendCombatEvent(actorId, actorName, actorFactionName, victimId, victimName, victimFactionName, weapon, distance, isBlueOnBlue, 2); // 2 = Wounded
     }
 
     //void SendKill(int actorId, int victimId, string weapon, bool isBlueOnBlue, float distance)
@@ -26,7 +26,7 @@ class CombatEventSender : ApiClient
     //}
 
     // --- Core ---
-    protected void SendCombatEvent(int actorId, string actorFactionName, int victimId, string victimFactionName, string weapon, float distance, bool isBlueOnBlue, int eventTypeId, int attempt = 0)
+    protected void SendCombatEvent(int actorId, string actorName, string actorFactionName, int victimId, string victimName, string victimFactionName, string weapon, float distance, bool isBlueOnBlue, int eventTypeId, int attempt = 0)
     {
 		
         if (!settings)
@@ -42,51 +42,61 @@ class CombatEventSender : ApiClient
         string actorUid = GetGame().GetBackendApi().GetPlayerIdentityId(actorId);
         string victimUid = GetGame().GetBackendApi().GetPlayerIdentityId(victimId);
 
+		/*
         // Retry hvis actor eller victim Uid ikke er klar
         if ((actorUid == "" || victimUid == "") && attempt < settings.MaxRetries)
         {
-            GetGame().GetCallqueue().CallLater(SendCombatEvent, 100, false, actorId, actorFactionName, victimId, victimFactionName, weapon, distance, isBlueOnBlue, eventTypeId, attempt + 1);
+            GetGame().GetCallqueue().CallLater(SendCombatEvent, 100, false, actorId, actorName, actorFactionName, victimId, victimName, victimFactionName, weapon, distance, isBlueOnBlue, eventTypeId, attempt + 1);
             return;
         }
+		*/
 		
 		if(actorUid == "") actorUid = "Environment";
 		if(victimUid == "") victimUid = "Environment";
 
-        string json = BuildPayload(actorUid, actorFactionName, victimUid, victimFactionName, weapon, distance, isBlueOnBlue, eventTypeId);
+        string json = BuildPayload(actorUid, actorName, actorFactionName, victimUid, victimName, victimFactionName, weapon, distance, isBlueOnBlue, eventTypeId);
         string endpoint = "/events/combat";
 
         OpsTrackLogger.Info(string.Format(
-            "Sending CombatEvent type %1: Actor=%2, ActorFaction=%3, Victim=%4, VictimFaction=%5 Weapon=%6 Distance=%7 TeamKill=%8",
-            eventTypeId, actorUid, actorFactionName, victimUid, victimFactionName, weapon, distance, isBlueOnBlue
-        ));
+            "Sending CombatEvent type %1: Actor=%2, ActorName=%3, ActorFaction=%4, Victim=%5, VictimName=%6 VictimFaction=%7 Weapon=%8 Distance=%9 TeamKill=%10",
+            eventTypeId, actorUid, actorName, actorFactionName, victimUid, victimName, victimFactionName, weapon, distance
+        ) +
+		string.Format(" %1", isBlueOnBlue)
+		
+		);
 
         Post(endpoint, json);
     }
 
     // --- Payload builder ---
-    protected string BuildPayload(string actorUid, string actorFactionName, string victimUid, string victimFactionName, string weapon, float distance, bool isBlueOnBlue, int eventTypeId)
+    protected string BuildPayload(string actorUid, string actorName, string actorFactionName, string victimUid, string victimName, string victimFactionName, string weapon, float distance, bool isBlueOnBlue, int eventTypeId)
     {
         return string.Format(
         
 		"{" +
 			"\"eventTypeId\":%1," +
 			"\"actorId\":\"%2\"," +
-			"\"actorFaction\":\"%3\"," +
-			"\"victimId\":\"%4\"," +
-			"\"victimFaction\":\"%5\"," +
-			"\"weapon\":\"%6\"," +
-			"\"distance\":%7," +
-			"\"isTeamKill\":%8" +
-		"}"
-		,
+			"\"actorName\":\"%3\"," +
+			"\"actorFaction\":\"%4\"," +
+			"\"victimId\":\"%5\"," +
+			"\"victimName\":\"%6\"," +
+			"\"victimFaction\":\"%7\"," +
+			"\"weapon\":\"%8\"," +
+			"\"distance\":%9,",
+		
             eventTypeId,
             actorUid,
+			actorName,
 			actorFactionName,
             victimUid,
+			victimName,
 			victimFactionName,
             weapon,
-            distance,
-            isBlueOnBlue.ToString()
-        );
+            distance
+        ) + string.Format(			
+		"\"isTeamKill\":%1" +
+		"}",
+		isBlueOnBlue.ToString()
+		);
     }
 }
