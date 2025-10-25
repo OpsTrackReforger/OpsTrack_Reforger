@@ -47,5 +47,6 @@ modded class SCR_BaseGameMode
         // Behold super til sidst som du allerede gør
         super.OnPlayerDisconnected(playerId, cause, timeout);
     }
+	
 }	
 

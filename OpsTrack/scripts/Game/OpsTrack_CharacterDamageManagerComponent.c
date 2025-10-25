@@ -1,7 +1,6 @@
 modded class SCR_CharacterDamageManagerComponent
 {
-	//Save last event-tid as (victim, actor)
-	ref map<string, float> m_LastWoundedEvent = new map<string, float>();
+
 
 	protected override void OnDamage(notnull BaseDamageContext damageContext)
 	{
@@ -46,73 +45,10 @@ modded class SCR_CharacterDamageManagerComponent
 			false // isDeleted
 		);
 
-		// Hent IDs og navne
-		int victimId = contextData.GetVictimPlayerID();
-		int killerId = contextData.GetKillerPlayerID();
-
-		string victimName = ResolveCharacterName(victim);
-		
-		if(victimId > 0)
-		{
-			victimName = GetGame().GetPlayerManager().GetPlayerName(victimId);
-		}
-		
-		
-		string killerName = ResolveCharacterName(killerEntity);
-
-		if(killerId > 0)
-		{
-			killerName = GetGame().GetPlayerManager().GetPlayerName(killerId);
-		}
-		
-
-		// Faktioner
-		string victimFactionName = "Unknown";
-		string killerFactionName = "Unknown";
-		
-		Faction victimFaction = GetFaction(victim, victimId);
-		Faction killerFaction = GetFaction(killerEntity, killerId);
-
-		if (victimFaction)
-			victimFactionName = victimFaction.GetFactionName();
-
-		if (killerFaction)
-			killerFactionName = killerFaction.GetFactionName();
-
-		// Distance
-		int distance = 0;
-		if (killerEntity && victim)
-			distance = (int)vector.Distance(killerEntity.GetOrigin(), victim.GetOrigin());
-
-		// Weapon
-		string weaponName = ResolveWeaponName(instigator);
-
-		// Relation
-		bool isTeamKill = victimFaction.IsFactionFriendly(killerFaction);
-
-		// Spam-beskyttelse
-		string key = string.Format("%1:%2", victimId, killerId);
-		float now = GetGame().GetWorld().GetWorldTime();
-		if (m_LastWoundedEvent.Contains(key) && now - m_LastWoundedEvent.Get(key) < 200)
-		{
-			super.OnDamage(damageContext);
-			return;
-		}
-		m_LastWoundedEvent.Set(key, now);
 
 		// Send event
 		CombatEventSender sender = CombatEventSender.Get();
-		sender.SendWounded(
-			killerId,
-			killerName,
-			killerFactionName,
-			victimId,
-			victimName,
-			victimFactionName,
-			weaponName,
-			isTeamKill,
-			distance
-		);
+		sender.SendWounded(contextData);
 
 		super.OnDamage(damageContext);
 	}
