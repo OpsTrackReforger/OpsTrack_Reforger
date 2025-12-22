@@ -1,18 +1,40 @@
 class OpsTrackCallback : RestCallback
 {
-    override void OnSuccess(string data, int dataSize)
+    protected ApiClient m_Client;
+
+    void OpsTrackCallback(ApiClient client)
     {
-        OpsTrackLogger.Info("REST request succeeded. Response size = " + dataSize);
+        m_Client = client;
+
+        // Register modern callbacks
+        SetOnSuccess(OnSuccessEx);
+        SetOnError(OnErrorEx);
+    }
+
+    // SUCCESS callback
+    void OnSuccessEx(RestCallback cb)
+    {
+        string data = cb.GetData();
+        int httpCode = cb.GetHttpCode();
+
+        OpsTrackLogger.Info("REST request succeeded. HTTP " + httpCode);
         OpsTrackLogger.Debug("REST response body: " + data);
     }
 
-    override void OnError(int errorCode)
+    // ERROR callback
+    void OnErrorEx(RestCallback cb)
     {
-        OpsTrackLogger.Error("REST request failed with error code: " + errorCode);
-    }
+        int httpCode = cb.GetHttpCode();
+        string data = cb.GetData(); // <-- THIS gives you the JSON error body
 
-    override void OnTimeout()
-    {
-        OpsTrackLogger.Error("REST request timed out.");
+        OpsTrackLogger.Error("REST request failed. HTTP " + httpCode);
+
+        if (data && data != "")
+            OpsTrackLogger.Error("REST error body: " + data);
+        else
+            OpsTrackLogger.Error("REST error body: <empty>");
+
+        // Trigger your backoff logic
+        m_Client.Backoff();
     }
 }

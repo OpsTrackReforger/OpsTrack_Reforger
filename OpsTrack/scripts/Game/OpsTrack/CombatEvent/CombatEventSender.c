@@ -1,13 +1,14 @@
-class CombatEventSender : ApiClient
+class CombatEventSender
 {
     private static ref CombatEventSender s_Instance;
+	private OpsTrackSettings settings;
 	
 	//Save last event-tid as (victim, actor)
 	private ref map<string, float> m_LastWoundedEvent = new map<string, float>();
 
     private void CombatEventSender()
     {
-        // Parent constructor initializes settings, m_Context and default m_Callback
+        settings = OpsTrackManager.Get().GetSettings();
     }
 
     static CombatEventSender Get()
@@ -29,6 +30,13 @@ class CombatEventSender : ApiClient
 		CombatEvent combatEvent = CreateCombatEvent(contextData, OpsTrack_EventType.KILL);
         SendCombatEvent(combatEvent); // 1 = Kill
     }
+	
+    void SendSelfHarm(SCR_InstigatorContextData contextData)
+    {
+		CombatEvent combatEvent = CreateCombatEvent(contextData, OpsTrack_EventType.SELF_HARM);
+        SendCombatEvent(combatEvent); // 0 = SELF Harm
+    }
+	
 	
 	
 	protected CombatEvent CreateCombatEvent(SCR_InstigatorContextData contextData, OpsTrack_EventType eventType)
@@ -97,7 +105,7 @@ class CombatEventSender : ApiClient
 	}
 
     // --- Core ---
-    protected void SendCombatEvent(CombatEvent combatEvent, int attempt = 0)
+    protected void SendCombatEvent(CombatEvent combatEvent)
     {
 		
 		if(!combatEvent) return; //Return if event is null
@@ -113,17 +121,16 @@ class CombatEventSender : ApiClient
         }
 
         string json = BuildPayload(combatEvent);
-        string endpoint = "/events/combat";
 
         OpsTrackLogger.Info(string.Format(
             "Sending CombatEvent type %1: Actor=%2, ActorName=%3, ActorFaction=%4, Victim=%5, VictimName=%6 VictimFaction=%7 Weapon=%8 Distance=%9 TeamKill=%10",
             combatEvent.eventType, combatEvent.actorUid, combatEvent.actorName, combatEvent.actorFactionName, combatEvent.victimUid, combatEvent.victimName, combatEvent.victimFactionName, combatEvent.weapon, combatEvent.distance
         ) +
-		string.Format(" %1", combatEvent.isBlueOnBlue)
+		string.Format("%1 %2", combatEvent.timeStamp, combatEvent.isBlueOnBlue)
 		
 		);
 
-        Post(endpoint, json);
+        OpsTrackManager.Get().GetApiClient().Enqueue(json, combatEvent.eventType);
     }
 
     // --- Payload builder ---
@@ -152,8 +159,10 @@ class CombatEventSender : ApiClient
             combatEvent.weapon,
             combatEvent.distance
         ) + string.Format(			
-		"\"isTeamKill\":%1" +
+		"\"timeStamp\":\"%1\"," +
+		"\"isTeamKill\":%2" +
 		"}",
+		combatEvent.timeStamp,
 		combatEvent.isBlueOnBlue.ToString()
 		);
     }

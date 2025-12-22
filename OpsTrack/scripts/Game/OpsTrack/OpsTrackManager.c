@@ -4,13 +4,14 @@ class OpsTrackManager
     private ref OpsTrackSettings m_Settings;
     private const string SETTINGS_PATH = "$profile:OpsTrackSettings.json";
     private static bool s_Initialized = false;
+	private static ref ApiClient m_ApiClient;
 	
 	//Event senders
 	//ref ConnectionEventSender ConnectionEventsSender = new ConnectionEventSender();
 
 	private void OpsTrackManager()
 	{
-
+		
 	}
 
 
@@ -22,6 +23,7 @@ class OpsTrackManager
 
             if (!s_Initialized) {
                 s_Instance.LoadOrCreate();
+				m_ApiClient = new ApiClient();
                 OpsTrackLogger.Info("OpsTrack Manager initialized on server.");
                 s_Initialized = true;
             }
@@ -35,6 +37,11 @@ class OpsTrackManager
     {
         return m_Settings;
     }
+	
+	ApiClient GetApiClient()
+	{
+		return m_ApiClient;
+	}
 
     void Reload()
     {
