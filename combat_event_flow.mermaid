@@ -1,0 +1,99 @@
+flowchart TD
+    subgraph DamageSystem["SCR_CharacterDamageManagerComponent (modded)"]
+        A1[OnDamage Called]
+        A2{IsServer?}
+        A3{Manager Exists?}
+        A4{KillEvents Enabled?}
+        A5{Victim Valid?}
+        A6{Already Dead?}
+        A7{Has Instigator?}
+        A8[Create SCR_InstigatorContextData]
+    end
+
+    subgraph Sender["CombatEventSender"]
+        B1[SendWounded / SendKill / SendSelfHarm]
+        B2[CreateCombatEvent]
+        B3{Spam Protection Check}
+        B4[Cleanup Old Events]
+        B5[Resolve Character Names]
+        B6[Resolve Factions]
+        B7[Calculate Distance]
+        B8[Resolve Weapon]
+        B9[Determine TeamKill]
+        B10[Create CombatEvent Object]
+        B11[SendCombatEvent]
+        B12[Generate JSON Payload]
+    end
+
+    subgraph Utilities["OpsTrack_EntityUtils"]
+        U1[ResolveCharacterName]
+        U2[GetFaction]
+        U3[ResolveWeaponName]
+        U4[GetPlayerIdentityIdSafe]
+    end
+
+    subgraph ApiClient["ApiClient"]
+        C1[Enqueue]
+        C2{CanSend?}
+        C3[Add to m_CombatEvents array]
+        C4{Batch Full OR Timer?}
+        C5[Flush]
+        C6[BuildBatchPayload]
+        C7[POST /events]
+    end
+
+    subgraph External["External API"]
+        E1[REST Endpoint]
+    end
+
+    %% Damage System Flow
+    A1 --> A2
+    A2 -->|No| X1[super.OnDamage and Return]
+    A2 -->|Yes| A3
+    A3 -->|No| X1
+    A3 -->|Yes| A4
+    A4 -->|No| X1
+    A4 -->|Yes| A5
+    A5 -->|No| X1
+    A5 -->|Yes| A6
+    A6 -->|Yes| X1
+    A6 -->|No| A7
+    A7 -->|No| X1
+    A7 -->|Yes| A8
+    A8 --> B1
+
+    %% Sender Flow
+    B1 --> B2
+    B2 --> B3
+    B3 -->|Spam Detected| X2[Return null]
+    B3 -->|OK| B4
+    B4 --> B5
+    B5 --> U1
+    U1 --> B6
+    B6 --> U2
+    U2 --> B7
+    B7 --> B8
+    B8 --> U3
+    U3 --> B9
+    B9 --> B10
+    B10 --> U4
+    U4 --> B11
+    B11 --> B12
+    B12 --> C1
+
+    %% API Client Flow
+    C1 --> C2
+    C2 -->|No| X3[Return]
+    C2 -->|Yes| C3
+    C3 --> C4
+    C4 -->|No| X4[Wait]
+    C4 -->|Yes| C5
+    C5 --> C6
+    C6 --> C7
+    C7 --> E1
+
+    style A1 fill:#FFD700
+    style E1 fill:#87CEEB
+    style X1 fill:#FFB6C1
+    style X2 fill:#FFB6C1
+    style X3 fill:#FFB6C1

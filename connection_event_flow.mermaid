@@ -1,0 +1,80 @@
+flowchart TD
+    subgraph GameMode["SCR_BaseGameMode (modded)"]
+        A1[Player Joins/Leaves]
+        A2{IsServer?}
+        A3{OpsTrack Enabled?}
+        A4{ConnectionEvents Enabled?}
+    end
+
+    subgraph Sender["ConnectionEventSender"]
+        B1[SendJoin / SendLeave]
+        B2[SendWithRetry]
+        B3{Get Player Identity}
+        B4{Identity Available?}
+        B5{Max Retries?}
+        B6[Create ConnectionEvent]
+        B7[Generate JSON Payload]
+    end
+
+    subgraph ApiClient["ApiClient"]
+        C1[Enqueue]
+        C2{CanSend?}
+        C3[Add to m_ConnectionEvents array]
+        C4{Batch Full OR Timer?}
+        C5[Flush]
+        C6[BuildBatchPayload]
+        C7[POST /events]
+    end
+
+    subgraph Callback["OpsTrackCallback"]
+        D1{Success?}
+        D2[Log Success]
+        D3[Log Error]
+        D4[Trigger Backoff]
+    end
+
+    subgraph External["External API"]
+        E1[REST Endpoint]
+    end
+
+    %% Flow
+    A1 --> A2
+    A2 -->|No| X1[Return]
+    A2 -->|Yes| A3
+    A3 -->|No| X1
+    A3 -->|Yes| A4
+    A4 -->|No| X1
+    A4 -->|Yes| B1
+
+    B1 --> B2
+    B2 --> B3
+    B3 --> B4
+    B4 -->|No| B5
+    B5 -->|No| B8[CallLater 100ms]
+    B8 --> B2
+    B5 -->|Yes| X2[Log Warning and Return]
+    B4 -->|Yes| B6
+    B6 --> B7
+    B7 --> C1
+
+    C1 --> C2
+    C2 -->|No - Backoff Active| X3[Return]
+    C2 -->|Yes| C3
+    C3 --> C4
+    C4 -->|No| X4[Wait for timer]
+    C4 -->|Yes| C5
+    C5 --> C6
+    C6 --> C7
+    C7 --> E1
+    E1 --> D1
+
+    D1 -->|Yes| D2
+    D1 -->|No| D3
+    D3 --> D4
+    D4 --> C8[Disable API for 120s]
+
+    style A1 fill:#90EE90
+    style E1 fill:#87CEEB
+    style X1 fill:#FFB6C1
+    style X2 fill:#FFB6C1
+    style X3 fill:#FFB6C1

@@ -1,0 +1,183 @@
+classDiagram
+    direction TB
+    
+    %% Core Manager
+    class OpsTrackManager {
+        -static ref OpsTrackManager s_Instance
+        -ref OpsTrackSettings m_Settings
+        -static ref ApiClient m_ApiClient
+        -static bool s_Initialized
+        +static Get() OpsTrackManager
+        +static GetIfExists() OpsTrackManager
+        +GetSettings() OpsTrackSettings
+        +GetApiClient() ApiClient
+        +Reload() void
+        -LoadOrCreate() void
+        -SavePretty() void
+    }
+
+    %% Settings
+    class OpsTrackSettings {
+        +string ApiBaseUrl
+        +string ApiKey
+        +bool EnableConnectionEvents
+        +bool EnableKillEvents
+        +int MaxRetries
+        +bool EnableDebug
+        +Load(SCR_JsonLoadContext) bool
+        +Save(SCR_JsonSaveContext) void
+        +IsValid() bool
+    }
+
+    %% API Client
+    class ApiClient {
+        -RestContext m_Context
+        -ref array~string~ m_ConnectionEvents
+        -ref array~string~ m_CombatEvents
+        -int m_LastFlushTick
+        -bool m_ApiEnabled
+        -int m_NextRetryTick
+        -bool m_IsShuttingDown
+        +Enqueue(string, OpsTrack_EventType) void
+        +Backoff() void
+        -CheckFlushTimer() void
+        -CanSend() bool
+        -Flush() void
+        -BuildBatchPayload() string
+    }
+
+    %% Callback
+    class OpsTrackCallback {
+        -ApiClient m_Client
+        +OnSuccessEx(RestCallback) void
+        +OnErrorEx(RestCallback) void
+        -TriggerBackoff() void
+    }
+
+    %% Event Senders
+    class ConnectionEventSender {
+        -static ref ConnectionEventSender s_Instance
+        -OpsTrackSettings m_Settings
+        +static Get() ConnectionEventSender
+        +RefreshSettings() void
+        +SendJoin(int) void
+        +SendLeave(int) void
+        -SendWithRetry(int, OpsTrack_EventType, int) void
+    }
+
+    class CombatEventSender {
+        -static ref CombatEventSender s_Instance
+        -OpsTrackSettings m_Settings
+        -ref map~string,float~ m_LastEventTime
+        +static Get() CombatEventSender
+        +RefreshSettings() void
+        +SendWounded(SCR_InstigatorContextData) void
+        +SendKill(SCR_InstigatorContextData) void
+        +SendSelfHarm(SCR_InstigatorContextData) void
+        -CreateCombatEvent(SCR_InstigatorContextData, OpsTrack_EventType) CombatEvent
+        -SendCombatEvent(CombatEvent) void
+        -CleanupOldEvents(float) void
+    }
+
+    %% Event Data Classes
+    class ConnectionEvent {
+        +string GameIdentity
+        +string Name
+        +OpsTrack_EventType EventTypeId
+        +string TimeStamp
+        +AsPayload() string
+    }
+
+    class CombatEvent {
+        +string actorUid
+        +string actorName
+        +string actorFactionName
+        +string victimUid
+        +string victimName
+        +string victimFactionName
+        +string weapon
+        +float distance
+        +bool isBlueOnBlue
+        +string timeStamp
+        +OpsTrack_EventType eventType
+        +AsPayload() string
+    }
+
+    %% Utilities
+    class OpsTrack_EntityUtils {
+        +static ResolveCharacterName(IEntity) string
+        +static ResolveWeaponName(Instigator) string
+        +static GetFaction(IEntity, int) Faction
+        +static GetFactionFromPlayerID(int) Faction
+        +static GetPlayerIdentityIdSafe(int) string
+    }
+
+    class OpsTrack_DateTime {
+        +static ToISO8601UTC() string
+    }
+
+    class OpsTrackLogger {
+        +static Debug(string) void
+        +static Info(string) void
+        +static Warn(string) void
+        +static Error(string) void
+        -static Log(OpsTrackLogLevel, string) void
+        -static WriteToFile(string) void
+    }
+
+    %% Game Hooks
+    class SCR_BaseGameMode {
+        -ref ConnectionEventSender m_ConnectionEvents
+        -bool m_OpsTrackEnabled
+        +EOnInit(IEntity) void
+        +OnPlayerRegistered(int) void
+        +OnPlayerDisconnected(int, KickCauseCode, int) void
+    }
+
+    class SCR_CharacterDamageManagerComponent {
+        #OnDamage(BaseDamageContext) void
+    }
+
+    %% Enums
+    class OpsTrack_EventType {
+        SELF_HARM = 0
+        KILL = 1
+        WOUNDED = 2
+        JOIN = 3
+        LEAVE = 4
+    }
+
+    class OpsTrackLogLevel {
+        DEBUG
+        INFO
+        WARN
+        ERROR
+    }
+
+    %% Relationships
+    OpsTrackManager --> OpsTrackSettings : manages
+    OpsTrackManager --> ApiClient : creates
+    
+    ApiClient --> OpsTrackCallback : creates
+    OpsTrackCallback --> ApiClient : triggers backoff
+    
+    ConnectionEventSender --> OpsTrackManager : uses
+    ConnectionEventSender --> ConnectionEvent : creates
+    ConnectionEventSender --> ApiClient : enqueues to
+    
+    CombatEventSender --> OpsTrackManager : uses
+    CombatEventSender --> CombatEvent : creates
+    CombatEventSender --> ApiClient : enqueues to
+    CombatEventSender --> OpsTrack_EntityUtils : uses
+    
+    CombatEvent --> OpsTrack_EntityUtils : uses
+    CombatEvent --> OpsTrack_DateTime : uses
+    ConnectionEvent --> OpsTrack_DateTime : uses
+    
+    SCR_BaseGameMode --> ConnectionEventSender : uses
+    SCR_BaseGameMode --> OpsTrackManager : initializes
+    
+    SCR_CharacterDamageManagerComponent --> CombatEventSender : uses
+    SCR_CharacterDamageManagerComponent --> OpsTrackManager : checks settings
+    
+    OpsTrackLogger --> OpsTrackManager : GetIfExists
