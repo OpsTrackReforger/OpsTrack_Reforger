@@ -1,149 +1,267 @@
+// OpsTrack_ApiClient.c
+// Batched REST API client with rate limiting and backoff
+
 class ApiClient
 {
-    protected RestContext m_Context;
+	protected RestContext m_Context;
+	protected ref array<string> m_ConnectionEvents;
+	protected ref array<string> m_CombatEvents;
+	protected ref OpsTrackCallback m_PendingCallback;  // Keep callback alive
 
-    // Separate buffers
-    protected ref array<string> m_ConnectionEvents;
-    protected ref array<string> m_CombatEvents;
+	protected int m_LastFlushTick;
+	protected bool m_ApiEnabled;
+	protected int m_NextRetryTick;
+	protected bool m_IsShuttingDown;
 
-    protected int m_LastFlushTick = 0;
+	private static const int FLUSH_INTERVAL_MS = 1000;
+	private static const int MAX_BATCH_SIZE = 25;
+	private static const int COOLDOWN_MS = 120000;
 
-    // circuit breaker
-    protected bool m_ApiEnabled = true;
-    protected int m_NextRetryTick = 0;
-
-    // tuning
-    const int FLUSH_INTERVAL_MS = 1000;   // 1s
-    const int MAX_BATCH_SIZE   = 25;
-    const int COOLDOWN_MS      = 120000;  // 2 min
-
-    void ApiClient()
-    {
-        OpsTrackSettings settings = OpsTrackManager.Get().GetSettings();
-        
-        RestApi api = GetGame().GetRestApi();
-        m_Context = api.GetContext(settings.ApiBaseUrl);
-        m_Context.SetHeaders("Content-Type,application/json,X-Api-Key," + settings.ApiKey);
-
-        m_ConnectionEvents = new array<string>();
-        m_CombatEvents = new array<string>();
-
-        // Start active flush timer (runs every 1 second)
-        GetGame().GetCallqueue().CallLater(CheckFlushTimer, 1000, true);
-    }
-
-    // called by game events
-    void Enqueue(string eventJson, OpsTrack_EventType type)
-    {
-        if (!CanSend())
-            return;
-
-        // Determine event category
-        if (type == OpsTrack_EventType.SELF_HARM ||
-            type == OpsTrack_EventType.KILL ||
-            type == OpsTrack_EventType.WOUNDED)
-        {
-            m_CombatEvents.Insert(eventJson);
-        }
-        else if (type == OpsTrack_EventType.JOIN ||
-                 type == OpsTrack_EventType.LEAVE)
-        {
-            m_ConnectionEvents.Insert(eventJson);
-        }
-
-        int now = System.GetTickCount();
-        int totalCount = m_ConnectionEvents.Count() + m_CombatEvents.Count();
-
-        // Lazy flush (still valid)
-        if (totalCount >= MAX_BATCH_SIZE || now - m_LastFlushTick >= FLUSH_INTERVAL_MS)
-        {
-            Flush();
-        }
-    }
-
-    // Active flush timer (runs every second)
-    void CheckFlushTimer()
-    {
-        // No events → nothing to flush
-        if (m_ConnectionEvents.IsEmpty() && m_CombatEvents.IsEmpty())
-            return;
-
-        int now = System.GetTickCount();
-
-        // If flush interval exceeded → flush
-        if (now - m_LastFlushTick >= FLUSH_INTERVAL_MS)
-        {
-            Flush();
-        }
-    }
-
-    protected bool CanSend()
-    {
-        if (!m_ApiEnabled)
-        {
-            if (System.GetTickCount() < m_NextRetryTick)
-                return false;
-
-            m_ApiEnabled = true;
-        }
-        return true;
-    }
-
-    protected void Flush()
-    {
-        if (m_ConnectionEvents.IsEmpty() && m_CombatEvents.IsEmpty())
-            return;
-
-        string payload = BuildBatchPayload();
-        
-        m_ConnectionEvents.Clear();
-        m_CombatEvents.Clear();
-
-        m_LastFlushTick = System.GetTickCount();
-
-        OpsTrackCallback cb = new OpsTrackCallback(this);
-        m_Context.POST(cb, "/events", payload);
+	void ApiClient()
+	{
+		OpsTrackLogger.Info("Initializing ApiClient");
 		
+		m_LastFlushTick = 0;
+		m_ApiEnabled = true;
+		m_NextRetryTick = 0;
+		m_IsShuttingDown = false;
 		
-		OpsTrackLogger.Debug("Sending payload: " + payload);
-    }
+		// Initialize arrays
+		m_ConnectionEvents = new array<string>();
+		m_CombatEvents = new array<string>();
 
-    protected string BuildBatchPayload()
-    {
-        string payload = "{";
+		// Get settings
+		OpsTrackManager manager = OpsTrackManager.GetIfExists();
+		if (!manager)
+		{
+			OpsTrackLogger.Error("ApiClient: OpsTrackManager not available!");
+			return;
+		}
+		
+		OpsTrackSettings settings = manager.GetSettings();
+		if (!settings)
+		{
+			OpsTrackLogger.Error("ApiClient: Settings unavailable!");
+			return;
+		}
 
-        // connectionEvents
-        payload += "\"connectionEvents\":[";
-        for (int i = 0; i < m_ConnectionEvents.Count(); i++)
-        {
-            payload += m_ConnectionEvents[i];
-            if (i < m_ConnectionEvents.Count() - 1)
-                payload += ",";
-        }
-        payload += "],";
+		// Get REST API
+		if (!GetGame())
+		{
+			OpsTrackLogger.Error("ApiClient: GetGame() returned null!");
+			return;
+		}
+		
+		RestApi api = GetGame().GetRestApi();
+		if (!api)
+		{
+			OpsTrackLogger.Error("ApiClient: RestApi not available!");
+			return;
+		}
 
-        // combatEvents
-        payload += "\"combatEvents\":[";
-        for (int i = 0; i < m_CombatEvents.Count(); i++)
-        {
-            payload += m_CombatEvents[i];
-            if (i < m_CombatEvents.Count() - 1)
-                payload += ",";
-        }
-        payload += "]";
+		// Create context
+		m_Context = api.GetContext(settings.ApiBaseUrl);
+		if (!m_Context)
+		{
+			OpsTrackLogger.Error(string.Format("Failed to create REST context for: %1", settings.ApiBaseUrl));
+			return;
+		}
 
-        payload += "}";
+		m_Context.SetHeaders("Content-Type,application/json,X-Api-Key," + settings.ApiKey);
+		OpsTrackLogger.Debug(string.Format("Connected to: %1", settings.ApiBaseUrl));
 
-        return payload;
-    }
+		// Start flush timer
+		if (GetGame().GetCallqueue())
+			GetGame().GetCallqueue().CallLater(CheckFlushTimer, 1000, true);
+		else
+			OpsTrackLogger.Warn("Could not start flush timer: Callqueue unavailable");
+		
+		OpsTrackLogger.Info("ApiClient initialized");
+	}
 
-    void Backoff()
-    {
-        m_ApiEnabled = false;
-        m_NextRetryTick = System.GetTickCount() + COOLDOWN_MS;
+	void ~ApiClient()
+	{
+		OpsTrackLogger.Info("ApiClient shutting down");
+		
+		m_IsShuttingDown = true;
 
-        // drop old telemetry
-        m_ConnectionEvents.Clear();
-        m_CombatEvents.Clear();
-    }
+		// Final flush of any pending events
+		int pendingCount = 0;
+		if (m_ConnectionEvents)
+			pendingCount = pendingCount + m_ConnectionEvents.Count();
+		if (m_CombatEvents)
+			pendingCount = pendingCount + m_CombatEvents.Count();
+		
+		if (pendingCount > 0)
+		{
+			OpsTrackLogger.Warn(string.Format("Final flush: %1 pending events", pendingCount));
+			Flush();
+		}
+	}
+
+	// Called by event senders to queue events
+	void Enqueue(string eventJson, OpsTrack_EventType eventType)
+	{
+		if (!CanSend())
+			return;
+		
+		if (!eventJson || eventJson == "")
+		{
+			OpsTrackLogger.Warn("Enqueue called with empty JSON");
+			return;
+		}
+
+		// Route to appropriate queue based on event type
+		if (eventType == OpsTrack_EventType.SELF_HARM ||
+			eventType == OpsTrack_EventType.KILL ||
+			eventType == OpsTrack_EventType.WOUNDED)
+		{
+			if (m_CombatEvents)
+				m_CombatEvents.Insert(eventJson);
+		}
+		else if (eventType == OpsTrack_EventType.JOIN ||
+				 eventType == OpsTrack_EventType.LEAVE)
+		{
+			if (m_ConnectionEvents)
+				m_ConnectionEvents.Insert(eventJson);
+		}
+		else
+		{
+			OpsTrackLogger.Warn(string.Format("Unknown event type: %1", eventType));
+			return;
+		}
+
+		// Check if we should flush
+		int now = System.GetTickCount();
+		int totalCount = GetPendingCount();
+
+		if (totalCount >= MAX_BATCH_SIZE || now - m_LastFlushTick >= FLUSH_INTERVAL_MS)
+		{
+			Flush();
+		}
+	}
+
+	// Timer callback - runs every second
+	void CheckFlushTimer()
+	{
+		// Stop timer if shutting down
+		if (m_IsShuttingDown)
+		{
+			OpsTrackLogger.Debug("Flush timer stopped (shutdown)");
+			return;
+		}
+
+		if (GetPendingCount() == 0)
+			return;
+
+		int now = System.GetTickCount();
+		if (now - m_LastFlushTick >= FLUSH_INTERVAL_MS)
+		{
+			Flush();
+		}
+	}
+
+	protected bool CanSend()
+	{
+		if (!m_ApiEnabled)
+		{
+			int now = System.GetTickCount();
+			if (now < m_NextRetryTick)
+				return false;
+
+			// Cooldown expired, re-enable
+			m_ApiEnabled = true;
+			OpsTrackLogger.Info("API re-enabled after cooldown");
+		}
+		return true;
+	}
+	
+	// Public for testing - returns number of pending events
+	int GetPendingCount()
+	{
+		int count = 0;
+		if (m_ConnectionEvents)
+			count = count + m_ConnectionEvents.Count();
+		if (m_CombatEvents)
+			count = count + m_CombatEvents.Count();
+		return count;
+	}
+
+	protected void Flush()
+	{
+		if (GetPendingCount() == 0)
+			return;
+		
+		if (!m_Context)
+		{
+			OpsTrackLogger.Error("Cannot flush: REST context is null");
+			return;
+		}
+
+		string payload = BuildBatchPayload();
+		
+		// Clear queues after building payload
+		if (m_ConnectionEvents)
+			m_ConnectionEvents.Clear();
+		if (m_CombatEvents)
+			m_CombatEvents.Clear();
+
+		m_LastFlushTick = System.GetTickCount();
+
+		// Store callback as ref to prevent garbage collection before response arrives
+		m_PendingCallback = new OpsTrackCallback(this);
+		m_Context.POST(m_PendingCallback, "/events", payload);
+		
+		OpsTrackLogger.Debug(string.Format("Sending payload: %1", payload));
+	}
+
+	protected string BuildBatchPayload()
+	{
+		string payload = "{";
+
+		// connectionEvents array
+		payload = payload + "\"connectionEvents\":[";
+		if (m_ConnectionEvents)
+		{
+			for (int i = 0; i < m_ConnectionEvents.Count(); i++)
+			{
+				payload = payload + m_ConnectionEvents[i];
+				if (i < m_ConnectionEvents.Count() - 1)
+					payload = payload + ",";
+			}
+		}
+		payload = payload + "],";
+
+		// combatEvents array
+		payload = payload + "\"combatEvents\":[";
+		if (m_CombatEvents)
+		{
+			for (int j = 0; j < m_CombatEvents.Count(); j++)
+			{
+				payload = payload + m_CombatEvents[j];
+				if (j < m_CombatEvents.Count() - 1)
+					payload = payload + ",";
+			}
+		}
+		payload = payload + "]";
+
+		payload = payload + "}";
+
+		return payload;
+	}
+
+	// Called by callback on error - triggers backoff
+	void Backoff()
+	{
+		m_ApiEnabled = false;
+		m_NextRetryTick = System.GetTickCount() + COOLDOWN_MS;
+
+		OpsTrackLogger.Warn(string.Format("API backoff triggered. Will retry in %1 seconds.", COOLDOWN_MS / 1000));
+
+		// Drop pending events during backoff
+		if (m_ConnectionEvents)
+			m_ConnectionEvents.Clear();
+		if (m_CombatEvents)
+			m_CombatEvents.Clear();
+	}
 }

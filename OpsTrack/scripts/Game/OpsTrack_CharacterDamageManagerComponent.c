@@ -1,119 +1,65 @@
+// OpsTrack_CharacterDamageManagerComponent.c
+// Hooks into damage system for wounded event tracking
+// NOTE: Kill events are handled by SCR_BaseGameMode.OnPlayerKilled/OnControllableDestroyed
+
 modded class SCR_CharacterDamageManagerComponent
 {
-
-
 	protected override void OnDamage(notnull BaseDamageContext damageContext)
 	{
-		// Stop hvis kill events er slået fra eller ikke server
-		if (!OpsTrackManager.Get().GetSettings().EnableKillEvents || !Replication.IsServer())
-		{
-			super.OnDamage(damageContext);
+		// Call super first to apply damage
+		super.OnDamage(damageContext);
+		
+		// Early exit checks
+		if (!Replication.IsServer())
 			return;
-		}
+		
+		// Safe settings check
+		OpsTrackManager manager = OpsTrackManager.GetIfExists();
+		if (!manager)
+			return;
+		
+		OpsTrackSettings settings = manager.GetSettings();
+		if (!settings || !settings.EnableKillEvents)
+			return;
 
 		IEntity victim = GetOwner();
 		if (!victim)
-		{
-			super.OnDamage(damageContext);
 			return;
-		}
 
-		// Skip hvis allerede død
+		// Get controller to check death state
 		SCR_CharacterControllerComponent victimController = SCR_CharacterControllerComponent.Cast(victim.FindComponent(SCR_CharacterControllerComponent));
+		
+		// Skip if dead - kills are handled by GameMode callbacks
 		if (victimController && victimController.IsDead())
-		{
-			super.OnDamage(damageContext);
 			return;
-		}
 
-		// Instigator fra damage
+		// Get instigator from damage context
 		Instigator instigator = damageContext.instigator;
 		if (!instigator)
-		{
-			super.OnDamage(damageContext);
 			return;
-		}
 
 		IEntity killerEntity = instigator.GetInstigatorEntity();
+		
+		// Skip self-harm in OnDamage - it will be caught as kill or wounded
+		// Self-harm that doesn't kill is still a wounded event
+		
+		// Get victim player ID
+		int victimPlayerId = 0;
+		if (GetGame() && GetGame().GetPlayerManager())
+			victimPlayerId = GetGame().GetPlayerManager().GetPlayerIdFromControlledEntity(victim);
 
-		// Opret InstigatorContextData for at få korrekt relation
+		// Create context data
 		SCR_InstigatorContextData contextData = new SCR_InstigatorContextData(
-			GetGame().GetPlayerManager().GetPlayerIdFromControlledEntity(victim),
+			victimPlayerId,
 			victim,
 			killerEntity,
 			instigator,
-			false // isDeleted
+			false
 		);
 
-
-		// Send event
+		// Send wounded event (not dead, just damaged)
 		CombatEventSender sender = CombatEventSender.Get();
-		sender.SendWounded(contextData);
-
-		super.OnDamage(damageContext);
+		if (sender)
+			sender.SendWounded(contextData);
 	}
-
-	// Utility
-	protected string ResolveCharacterName(IEntity entity)
-	{
-		if (!entity)
-			return "Environment";
-	
-		int playerId = SCR_PossessingManagerComponent.GetPlayerIdFromControlledEntity(entity);
-		if (playerId > 0)
-			return GetGame().GetPlayerManager().GetPlayerName(playerId);
-	
-		SCR_EditableEntityComponent entityComp = SCR_EditableEntityComponent.Cast(entity.FindComponent(SCR_EditableEntityComponent));
-		if (entityComp)
-			return entityComp.GetDisplayName();
-	
-		return entity.GetName(); // fallback
-	}
-
-	// Utility
-	protected string ResolveWeaponName(Instigator inst)
-	{
-		if (!inst) return "Unknown";
-		IEntity ent = inst.GetInstigatorEntity();
-		if (!ent) return "Unknown";
-	
-		// Try infantry weapon
-		CharacterWeaponManagerComponent weapMgr = CharacterWeaponManagerComponent.Cast(ent.FindComponent(CharacterWeaponManagerComponent));
-		if (weapMgr)
-		{
-			BaseWeaponComponent weapon = weapMgr.GetCurrentWeapon();
-			if (weapon)
-			{
-				UIInfo info = weapon.GetUIInfo();
-				if (info)
-					return info.GetName();
-			}
-		}
-	
-		return "Unknown";
-	}
-	
-	//~ Prioritizes getting the faction of the entity but will try get player faction if the faction changes
-	protected Faction GetFaction(IEntity entity, int playerID)
-	{
-		if (!entity)
-			return GetFactionFromPlayerID(playerID);
-		
-		FactionAffiliationComponent factionAffiliation = FactionAffiliationComponent.Cast(entity.FindComponent(FactionAffiliationComponent));
-		if (!factionAffiliation)
-			return GetFactionFromPlayerID(playerID);
-		
-		return factionAffiliation.GetAffiliatedFaction();
-	}
-	
-	//------------------------------------------------------------------------------------------------
-	//~ Get faction off player ID
-	protected Faction GetFactionFromPlayerID(int playerID)
-	{
-		if (playerID <= 0)
-			return null;
-		
-		return SCR_FactionManager.SGetPlayerFaction(playerID);
-	}
-
-};
+}

@@ -1,52 +1,132 @@
 // OpsTrack_BaseGameMode.c
+// Hooks into SCR_BaseGameMode for player connection and kill tracking
+
 modded class SCR_BaseGameMode
 {
-    ref ConnectionEventSender m_ConnectionEvents;
-    bool m_OpsTrackEnabled;
+	private ref ConnectionEventSender m_ConnectionEvents;
+	private ref CombatEventSender m_CombatEvents;
+	private bool m_OpsTrackEnabled;
+	private bool m_KillEventsEnabled;
 
-    override void EOnInit(IEntity owner)
-    {
-        super.EOnInit(owner);
+	override void EOnInit(IEntity owner)
+	{
+		super.EOnInit(owner);
 
+		// Only initialize on server
+		if (!Replication.IsServer())
+			return;
 		
-		//WTF is this vibe shit
-        if (Replication.IsServer())
-        {
-            OpsTrackSettings settings = OpsTrackManager.Get().GetSettings();
+		// Initialize OpsTrack
+		OpsTrackManager manager = OpsTrackManager.Get();
+		if (!manager)
+		{
+			OpsTrackLogger.Error("Failed to initialize OpsTrackManager.");
+			m_OpsTrackEnabled = false;
+			return;
+		}
+		
+		OpsTrackSettings settings = manager.GetSettings();
+		if (!settings)
+		{
+			OpsTrackLogger.Error("Failed to get OpsTrack settings.");
+			m_OpsTrackEnabled = false;
+			return;
+		}
+		
+		// Respect feature toggles
+		m_OpsTrackEnabled = settings.EnableConnectionEvents;
+		m_KillEventsEnabled = settings.EnableKillEvents;
 
-            // Respect feature toggle
-            m_OpsTrackEnabled = settings && settings.EnableConnectionEvents;
+		if (m_OpsTrackEnabled)
+		{
+			m_ConnectionEvents = ConnectionEventSender.Get();
+			OpsTrackLogger.Info("OpsTrack initialized. Connection events enabled.");
+		}
+		else
+		{
+			OpsTrackLogger.Info("OpsTrack initialized. Connection events disabled by settings.");
+		}
+		
+		if (m_KillEventsEnabled)
+		{
+			m_CombatEvents = CombatEventSender.Get();
+			OpsTrackLogger.Info("OpsTrack: Kill events enabled.");
+		}
+		else
+		{
+			OpsTrackLogger.Info("OpsTrack: Kill events disabled by settings.");
+		}
+	}
 
-            if (m_OpsTrackEnabled)
-            {
-                m_ConnectionEvents = ConnectionEventSender.Get();
-                OpsTrackLogger.Info("Mod is running on the server! Connection events enabled.");
-            }
-            else
-            {
-                OpsTrackLogger.Info("Mod is running on the server! Connection events disabled by settings.");
+	override void OnPlayerRegistered(int playerId)
+	{
+		super.OnPlayerRegistered(playerId);
 
-            }
-        }
+		if (!Replication.IsServer())
+			return;
+		
+		if (!m_OpsTrackEnabled)
+			return;
+		
+		if (!m_ConnectionEvents)
+		{
+			OpsTrackLogger.Warn("OnPlayerRegistered: ConnectionEventSender not available");
+			return;
+		}
+		
+		m_ConnectionEvents.SendJoin(playerId);
+	}
 
-    }
+	override void OnPlayerDisconnected(int playerId, KickCauseCode cause, int timeout)
+	{
+		// Send leave event BEFORE calling super (which may clean up player data)
+		if (Replication.IsServer() && m_OpsTrackEnabled && m_ConnectionEvents)
+		{
+			m_ConnectionEvents.SendLeave(playerId);
+		}
 
-    override void OnPlayerRegistered(int playerId)
-    {
-        super.OnPlayerRegistered(playerId);
-
-        if (Replication.IsServer() && m_OpsTrackEnabled && m_ConnectionEvents)
-            m_ConnectionEvents.SendJoin(playerId);
-    }
-
-    override void OnPlayerDisconnected(int playerId, KickCauseCode cause, int timeout)
-    {
-        if (Replication.IsServer() && m_OpsTrackEnabled && m_ConnectionEvents)
-            m_ConnectionEvents.SendLeave(playerId);
-
-        // Behold super til sidst som du allerede gør
-        super.OnPlayerDisconnected(playerId, cause, timeout);
-    }
+		super.OnPlayerDisconnected(playerId, cause, timeout);
+	}
 	
-}	
-
+	
+	
+	// Called when any controllable entity is destroyed (players AND AI)
+	override void OnControllableDestroyed(IEntity entity, IEntity killerEntity, notnull Instigator instigator)
+	{
+		super.OnControllableDestroyed(entity, killerEntity, instigator);
+		
+		if (!Replication.IsServer())
+			return;
+		
+		if (!m_KillEventsEnabled || !m_CombatEvents)
+			return;
+		
+		// Get player ID (0 for AI)
+		int victimPlayerId = 0;
+		if (GetGame() && GetGame().GetPlayerManager())
+			victimPlayerId = GetGame().GetPlayerManager().GetPlayerIdFromControlledEntity(entity);
+		
+		OpsTrackLogger.Debug(string.Format("OnControllableDestroyed: victimPlayerId=%1", victimPlayerId));
+		
+		// Determine if self-harm
+		bool isSelfHarm = (killerEntity == entity);
+		
+		// Create context data
+		SCR_InstigatorContextData contextData = new SCR_InstigatorContextData(
+			victimPlayerId,
+			entity,
+			killerEntity,
+			instigator,
+			false
+		);
+		
+		if (isSelfHarm)
+		{
+			m_CombatEvents.SendSelfHarm(contextData);
+		}
+		else
+		{
+			m_CombatEvents.SendKill(contextData);
+		}
+	}
+}

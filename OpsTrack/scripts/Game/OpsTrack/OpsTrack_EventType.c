@@ -1,3 +1,5 @@
+// OpsTrack_EventType.c
+
 enum OpsTrack_EventType
 {
 	SELF_HARM = 0,
@@ -5,5 +7,4 @@ enum OpsTrack_EventType
 	WOUNDED = 2,
 	JOIN = 3,
 	LEAVE = 4
-	
 }
