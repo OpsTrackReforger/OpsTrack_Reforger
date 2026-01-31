@@ -90,6 +90,37 @@ modded class SCR_BaseGameMode
 	
 	
 	
+	// Called when player spawn is finalized (player is now controlling the entity)
+	override void OnPlayerSpawnFinalize_S(SCR_SpawnRequestComponent requestComponent, SCR_SpawnHandlerComponent handlerComponent, SCR_SpawnData data, IEntity entity)
+	{
+		super.OnPlayerSpawnFinalize_S(requestComponent, handlerComponent, data, entity);
+
+		if (!entity)
+			return;
+
+		OpsTrackManager manager = OpsTrackManager.Get();
+		if (!manager)
+			return;
+
+		OpsTrack_EntityManager entityMgr = manager.GetEntityManager();
+		if (!entityMgr)
+			return;
+
+		int playerId = requestComponent.GetPlayerId();
+		if (playerId <= 0)
+			return;
+
+		string playerName = GetGame().GetPlayerManager().GetPlayerName(playerId);
+		string factionName = "Unknown";
+
+		Faction faction = OpsTrack_EntityUtils.GetFaction(entity, playerId);
+		if (faction)
+			factionName = faction.GetFactionName();
+
+		entityMgr.GetOrCreatePlayerEntity(playerId, playerName, factionName);
+	}
+
+	
 	// Called when any controllable entity is destroyed (players AND AI)
 	override void OnControllableDestroyed(IEntity entity, IEntity killerEntity, notnull Instigator instigator)
 	{
@@ -105,8 +136,6 @@ modded class SCR_BaseGameMode
 		int victimPlayerId = 0;
 		if (GetGame() && GetGame().GetPlayerManager())
 			victimPlayerId = GetGame().GetPlayerManager().GetPlayerIdFromControlledEntity(entity);
-		
-		OpsTrackLogger.Debug(string.Format("OnControllableDestroyed: victimPlayerId=%1", victimPlayerId));
 		
 		// Determine if self-harm
 		bool isSelfHarm = (killerEntity == entity);
