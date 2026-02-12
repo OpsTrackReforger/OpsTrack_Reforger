@@ -1,36 +1,52 @@
 // OpsTrack_ApiClient.c
 // Batched REST API client with rate limiting and backoff
+// Designed to minimize HTTP requests by combining all data into unified batches
 
 class ApiClient
 {
 	protected RestContext m_Context;
+
+	// Unified data queues - all sent together in one request
 	protected ref array<string> m_ConnectionEvents;
 	protected ref array<string> m_CombatEvents;
 	protected ref array<string> m_Entities;
+	protected ref array<string> m_EntityStates;
+	protected ref array<string> m_EntityAssignments;  // entityIds to assign to current mission
+
 	protected ref OpsTrackCallback m_PendingCallback;
 
 	protected int m_LastFlushTick;
 	protected bool m_ApiEnabled;
 	protected int m_NextRetryTick;
 	protected bool m_IsShuttingDown;
+	protected bool m_HasPendingRequest;  // Track if we're waiting for a response
 
-	private static const int FLUSH_INTERVAL_MS = 1000;
-	private static const int MAX_BATCH_SIZE = 25;
-	private static const int COOLDOWN_MS = 120000;
+	// Configuration - tuned to avoid Enfusion's request limits
+	// Enfusion has an internal limit on concurrent requests per host
+	// By sending only ONE request every few seconds, we stay well under the limit
+	private static const int FLUSH_INTERVAL_MS = 3000;   // Flush every 3 seconds
+	private static const int MAX_STATES_PER_BATCH = 500; // Max entity states per request (keeps payload under ~100KB)
+	private static const int COOLDOWN_MS = 120000;       // Backoff on error
+
+	// Payload size limits (Enfusion max is 1MB, we stay well under)
+	private static const int MAX_PAYLOAD_BYTES = 800000; // 800KB safety limit
 
 	void ApiClient()
 	{
-		OpsTrackLogger.Info("Initializing ApiClient");
-		
-		m_LastFlushTick = 0;
+		OpsTrackLogger.Info("Initializing ApiClient (unified batch mode)");
+
+		m_LastFlushTick = System.GetTickCount();
 		m_ApiEnabled = true;
 		m_NextRetryTick = 0;
 		m_IsShuttingDown = false;
-		
-		// Initialize arrays
+		m_HasPendingRequest = false;
+
+		// Initialize all queues
 		m_ConnectionEvents = new array<string>();
 		m_CombatEvents = new array<string>();
 		m_Entities = new array<string>();
+		m_EntityStates = new array<string>();
+		m_EntityAssignments = new array<string>();
 
 		// Get settings
 		OpsTrackManager manager = OpsTrackManager.GetIfExists();
@@ -39,7 +55,7 @@ class ApiClient
 			OpsTrackLogger.Error("ApiClient: OpsTrackManager not available!");
 			return;
 		}
-		
+
 		OpsTrackSettings settings = manager.GetSettings();
 		if (!settings)
 		{
@@ -53,7 +69,7 @@ class ApiClient
 			OpsTrackLogger.Error("ApiClient: GetGame() returned null!");
 			return;
 		}
-		
+
 		RestApi api = GetGame().GetRestApi();
 		if (!api)
 		{
@@ -72,45 +88,36 @@ class ApiClient
 		m_Context.SetHeaders("Content-Type,application/json,X-Api-Key," + settings.ApiKey);
 		OpsTrackLogger.Debug(string.Format("Connected to: %1", settings.ApiBaseUrl));
 
-		// Start flush timer
-		if (GetGame().GetCallqueue())
-			GetGame().GetCallqueue().CallLater(CheckFlushTimer, 1000, true);
-		else
-			OpsTrackLogger.Warn("Could not start flush timer: Callqueue unavailable");
-		
-		OpsTrackLogger.Info("ApiClient initialized");
+		// NOTE: We don't use CallLater for the timer anymore.
+		// Instead, CheckAndFlush() is called from StateTracker.CaptureAllPositions()
+		// which already runs on a 1-second timer during recording.
+
+		OpsTrackLogger.Info("ApiClient initialized successfully");
 	}
 
 	void ~ApiClient()
 	{
 		OpsTrackLogger.Info("ApiClient shutting down");
-		
 		m_IsShuttingDown = true;
 
 		// Final flush of any pending data
-		int pendingCount = GetPendingCount();
-		
-		if (pendingCount > 0)
+		if (GetTotalPendingCount() > 0)
 		{
-			OpsTrackLogger.Warn(string.Format("Final flush: %1 pending items", pendingCount));
-			FlushEntities();
-			Flush();
+			OpsTrackLogger.Warn(string.Format("Final flush: %1 pending items", GetTotalPendingCount()));
+			FlushUnified();
 		}
 	}
 
-	// Queue event (combat or connection)
+	// ============================================
+	// PUBLIC QUEUE METHODS - Add data to queues
+	// ============================================
+
+	// Queue a combat or connection event
 	void Enqueue(string eventJson, OpsTrack_EventType eventType)
 	{
-		if (!CanSend())
+		if (!CanSend() || !eventJson || eventJson == "")
 			return;
-		
-		if (!eventJson || eventJson == "")
-		{
-			OpsTrackLogger.Warn("Enqueue called with empty JSON");
-			return;
-		}
 
-		// Route to appropriate queue based on event type
 		if (eventType == OpsTrack_EventType.SELF_HARM ||
 			eventType == OpsTrack_EventType.KILL ||
 			eventType == OpsTrack_EventType.WOUNDED)
@@ -124,259 +131,274 @@ class ApiClient
 			if (m_ConnectionEvents)
 				m_ConnectionEvents.Insert(eventJson);
 		}
-		else
-		{
-			OpsTrackLogger.Warn(string.Format("Unknown event type: %1", eventType));
-			return;
-		}
-
-		// Check if we should flush
-		int now = System.GetTickCount();
-		int totalCount = GetPendingEventCount();
-
-		if (totalCount >= MAX_BATCH_SIZE || now - m_LastFlushTick >= FLUSH_INTERVAL_MS)
-		{
-			Flush();
-		}
 	}
 
-	// Queue entity and flush immediately
-	// Note: Timer-based batching wasn't working reliably, so we flush on each enqueue
+	// Queue an entity for creation
 	void EnqueueEntity(string entityJson)
 	{
-		if (!CanSend())
-		{
-			OpsTrackLogger.Warn("EnqueueEntity: CanSend() returned false");
+		if (!CanSend() || !entityJson || entityJson == "")
 			return;
-		}
-
-		if (!entityJson || entityJson == "")
-		{
-			OpsTrackLogger.Warn("EnqueueEntity called with empty JSON");
-			return;
-		}
 
 		if (m_Entities)
 		{
 			m_Entities.Insert(entityJson);
 			OpsTrackLogger.Debug(string.Format("Entity queued. Queue size: %1", m_Entities.Count()));
-
-			// Flush immediately since timer-based batching isn't working
-			FlushEntities();
 		}
 	}
-	
-	// Send mission start to /missions endpoint
+
+	// Queue entity state (position update)
+	void EnqueueEntityState(string stateJson)
+	{
+		if (!CanSend() || !stateJson || stateJson == "")
+			return;
+
+		if (m_EntityStates)
+		{
+			m_EntityStates.Insert(stateJson);
+
+			// Force flush if we have too many states (prevents payload from getting too large)
+			if (m_EntityStates.Count() >= MAX_STATES_PER_BATCH)
+			{
+				OpsTrackLogger.Info(string.Format("State batch full (%1), forcing flush", MAX_STATES_PER_BATCH));
+				FlushUnified();
+			}
+		}
+	}
+
+	// Queue entity assignment to current mission
+	void EnqueueEntityAssignment(string entityId)
+	{
+		if (!CanSend() || !entityId || entityId == "")
+			return;
+
+		if (m_EntityAssignments)
+			m_EntityAssignments.Insert(entityId);
+	}
+
+	// ============================================
+	// DIRECT SEND METHODS - For critical one-off requests
+	// These should be used sparingly!
+	// ============================================
+
+	// Send mission start (must be sent immediately, not batched)
 	void SendMissionStart(string payload)
 	{
-		if (!CanSend())
-		{
-			OpsTrackLogger.Warn("SendMissionStart: CanSend() returned false (API in backoff)");
+		if (!CanSend() || !m_Context)
 			return;
-		}
 
-		if (!m_Context)
-		{
-			OpsTrackLogger.Error("Cannot send mission start: REST context is null");
-			return;
-		}
-
-		OpsTrackLogger.Info(string.Format("Sending mission start to /missions: %1", payload));
+		OpsTrackLogger.Info(string.Format("Sending mission start: %1", payload));
 		m_PendingCallback = new OpsTrackCallback(this);
 		m_Context.POST(m_PendingCallback, "/missions", payload);
 	}
 
-	// Send mission end to /missions/{id}/end endpoint
+	// Send mission end (must be sent immediately)
 	void SendMissionEnd(UUID missionId)
 	{
-		if (!CanSend())
+		if (!CanSend() || !m_Context)
 			return;
-
-		if (!m_Context)
-		{
-			OpsTrackLogger.Error("Cannot send mission end: REST context is null");
-			return;
-		}
 
 		string endpoint = string.Format("/missions/%1/end", missionId);
-
 		m_PendingCallback = new OpsTrackCallback(this);
 		m_Context.POST(m_PendingCallback, endpoint, "{}");
 	}
 
-	// Send entity states batch to /entitystates/batch endpoint
+	// ============================================
+	// LEGACY METHODS - Kept for compatibility
+	// These now queue data instead of sending directly
+	// ============================================
+
+	// Legacy: Send entity states - now queues instead
 	void SendEntityStates(string payload)
 	{
-		if (!CanSend())
-			return;
-
-		if (!m_Context)
-		{
-			OpsTrackLogger.Error("Cannot send entity states: REST context is null");
-			return;
-		}
-
-		m_PendingCallback = new OpsTrackCallback(this);
-		m_Context.POST(m_PendingCallback, "/entitystates/batch", payload);
+		// Parse the states from the payload and queue them individually
+		// For now, we'll just log a warning - StateTracker should call EnqueueEntityState directly
+		OpsTrackLogger.Warn("SendEntityStates called - this should use EnqueueEntityState instead");
 	}
 
-	// Assign entities to a mission via POST /entities/assign-mission
+	// Legacy: Assign entities to mission - now queues instead
 	void AssignEntitiesToMission(string payload)
 	{
-		if (!CanSend())
-		{
-			OpsTrackLogger.Warn("AssignEntitiesToMission: CanSend() returned false (API in backoff)");
-			return;
-		}
-
-		if (!m_Context)
-		{
-			OpsTrackLogger.Error("Cannot assign entities to mission: REST context is null");
-			return;
-		}
-
-		OpsTrackLogger.Info(string.Format("Assigning entities to mission: %1", payload));
-		m_PendingCallback = new OpsTrackCallback(this);
-		m_Context.POST(m_PendingCallback, "/entities/assign-mission", payload);
+		// This is called with full payload, but we just need the entityIds
+		// For now, log warning - callers should use EnqueueEntityAssignment
+		OpsTrackLogger.Warn("AssignEntitiesToMission called - this should use EnqueueEntityAssignment instead");
 	}
 
-	// Timer callback - runs every second
-	void CheckFlushTimer()
+	// ============================================
+	// UNIFIED FLUSH - Single request with all data
+	// ============================================
+
+	// Called from StateTracker every second - checks if it's time to flush
+	void CheckAndFlush()
 	{
 		if (m_IsShuttingDown)
 			return;
 
-		// Debug: Log entity queue status
-		int entityCount = 0;
-		if (m_Entities)
-			entityCount = m_Entities.Count();
-
-		// Log every tick to verify timer is running (temporary debug)
-		if (entityCount > 0)
-			OpsTrackLogger.Debug(string.Format("CheckFlushTimer tick: %1 entities pending", entityCount));
-
-		if (entityCount > 0)
+		// Skip if we're still waiting for previous request
+		if (m_HasPendingRequest)
 		{
-			OpsTrackLogger.Info(string.Format("Flushing %1 entities from timer", entityCount));
-			FlushEntities();
-		}
-
-		// Flush events if any pending
-		int now = System.GetTickCount();
-		if (GetPendingEventCount() > 0 && now - m_LastFlushTick >= FLUSH_INTERVAL_MS)
-			Flush();
-	}
-
-	protected bool CanSend()
-	{
-		if (!m_ApiEnabled)
-		{
-			int now = System.GetTickCount();
-			if (now < m_NextRetryTick)
-				return false;
-
-			// Cooldown expired, re-enable
-			m_ApiEnabled = true;
-			OpsTrackLogger.Info("API re-enabled after cooldown");
-		}
-		return true;
-	}
-	
-	// Returns number of pending events (not entities)
-	int GetPendingEventCount()
-	{
-		int count = 0;
-		if (m_ConnectionEvents)
-			count = count + m_ConnectionEvents.Count();
-		if (m_CombatEvents)
-			count = count + m_CombatEvents.Count();
-		return count;
-	}
-	
-	// Returns total pending count (events + entities)
-	int GetPendingCount()
-	{
-		int count = GetPendingEventCount();
-		if (m_Entities)
-			count = count + m_Entities.Count();
-		return count;
-	}
-
-	// Flush events to /events endpoint
-	protected void Flush()
-	{
-		if (GetPendingEventCount() == 0)
+			OpsTrackLogger.Debug("Skipping flush - previous request still pending");
 			return;
-		
+		}
+
+		// Check if enough time has passed since last flush
+		int now = System.GetTickCount();
+		if (now - m_LastFlushTick < FLUSH_INTERVAL_MS)
+			return;
+
+		int total = GetTotalPendingCount();
+		if (total == 0)
+			return;
+
+		// Log queue sizes
+		int stateCount = 0;
+		int entityCount = 0;
+		int assignCount = 0;
+		if (m_EntityStates) stateCount = m_EntityStates.Count();
+		if (m_Entities) entityCount = m_Entities.Count();
+		if (m_EntityAssignments) assignCount = m_EntityAssignments.Count();
+
+		OpsTrackLogger.Info(string.Format("Unified flush: %1 states, %2 entities, %3 assignments", stateCount, entityCount, assignCount));
+		FlushUnified();
+	}
+
+	// Force flush - used when stopping recording
+	void ForceFlush()
+	{
+		if (GetTotalPendingCount() > 0)
+		{
+			OpsTrackLogger.Info("Force flushing remaining data...");
+			FlushUnified();
+		}
+	}
+
+	// Send all queued data in a single request
+	protected void FlushUnified()
+	{
+		if (GetTotalPendingCount() == 0)
+			return;
+
 		if (!m_Context)
 		{
 			OpsTrackLogger.Error("Cannot flush: REST context is null");
 			return;
 		}
 
-		string payload = BuildEventBatchPayload();
-		
-		// Clear queues after building payload
-		if (m_ConnectionEvents)
-			m_ConnectionEvents.Clear();
-		if (m_CombatEvents)
-			m_CombatEvents.Clear();
+		// Limit states per batch to avoid payload size issues
+		int statesToSend = MAX_STATES_PER_BATCH;
+		if (m_EntityStates && m_EntityStates.Count() < statesToSend)
+			statesToSend = m_EntityStates.Count();
 
-		m_LastFlushTick = System.GetTickCount();
+		// Build unified payload (with limited states)
+		string payload = BuildUnifiedPayload(statesToSend);
 
-		// Store callback as ref to prevent garbage collection before response arrives
-		m_PendingCallback = new OpsTrackCallback(this);
-		m_Context.POST(m_PendingCallback, "/events", payload);
-	}
-
-	// Flush entities to /entities/batch endpoint
-	protected void FlushEntities()
-	{
-		if (!m_Entities || m_Entities.Count() == 0)
-			return;
-
-		if (!m_Context)
+		// Check payload size
+		int payloadSize = payload.Length();
+		if (payloadSize > MAX_PAYLOAD_BYTES)
 		{
-			OpsTrackLogger.Error("Cannot flush entities: REST context is null");
-			return;
+			OpsTrackLogger.Warn(string.Format("Payload too large (%1 bytes), reducing batch size", payloadSize));
+			// Retry with smaller batch
+			statesToSend = statesToSend / 2;
+			if (statesToSend < 10)
+				statesToSend = 10;
+			payload = BuildUnifiedPayload(statesToSend);
 		}
 
-		string payload = BuildEntityBatchPayload();
-		int count = m_Entities.Count();
+		// Remove sent items from queues
+		ClearSentItems(statesToSend);
 
-		// Clear queue after building payload
-		m_Entities.Clear();
+		m_LastFlushTick = System.GetTickCount();
+		m_HasPendingRequest = true;
 
-		OpsTrackLogger.Info(string.Format("Flushing %1 entities to /entities/batch", count));
+		// Send single unified request
 		m_PendingCallback = new OpsTrackCallback(this);
-		m_Context.POST(m_PendingCallback, "/entities/batch", payload);
+		m_Context.POST(m_PendingCallback, "/batch", payload);
+
+		// If there are remaining states, schedule another flush soon
+		if (m_EntityStates && m_EntityStates.Count() > 0)
+		{
+			OpsTrackLogger.Info(string.Format("Batch sent, %1 states remaining in queue", m_EntityStates.Count()));
+		}
 	}
 
-	protected string BuildEventBatchPayload()
+	// Build payload with a limit on how many states to include
+	protected string BuildUnifiedPayload(int maxStates)
 	{
-		string payload = "{";
-
-		// connectionEvents array
-		payload = payload + "\"connectionEvents\":[";
-		if (m_ConnectionEvents)
+		OpsTrackManager manager = OpsTrackManager.GetIfExists();
+		string missionIdStr = "null";
+		if (manager && manager.IsRecording())
 		{
-			for (int i = 0; i < m_ConnectionEvents.Count(); i++)
+			UUID missionId = manager.GetCurrentMissionId();
+			if (!missionId.IsNull())
+				missionIdStr = "\"" + missionId + "\"";
+		}
+
+		string payload = "{";
+		payload = payload + "\"missionId\":" + missionIdStr + ",";
+
+		// Entities array (all entities - these are small)
+		payload = payload + "\"entities\":[";
+		if (m_Entities)
+		{
+			for (int i = 0; i < m_Entities.Count(); i++)
 			{
-				payload = payload + m_ConnectionEvents[i];
-				if (i < m_ConnectionEvents.Count() - 1)
+				payload = payload + m_Entities[i];
+				if (i < m_Entities.Count() - 1)
 					payload = payload + ",";
 			}
 		}
 		payload = payload + "],";
 
-		// combatEvents array
+		// Entity states array (limited to maxStates)
+		payload = payload + "\"states\":[";
+		if (m_EntityStates)
+		{
+			int stateCount = m_EntityStates.Count();
+			if (stateCount > maxStates)
+				stateCount = maxStates;
+
+			for (int s = 0; s < stateCount; s++)
+			{
+				payload = payload + m_EntityStates[s];
+				if (s < stateCount - 1)
+					payload = payload + ",";
+			}
+		}
+		payload = payload + "],";
+
+		// Entity assignments array (all - these are small)
+		payload = payload + "\"assignEntityIds\":[";
+		if (m_EntityAssignments)
+		{
+			for (int a = 0; a < m_EntityAssignments.Count(); a++)
+			{
+				payload = payload + "\"" + m_EntityAssignments[a] + "\"";
+				if (a < m_EntityAssignments.Count() - 1)
+					payload = payload + ",";
+			}
+		}
+		payload = payload + "],";
+
+		// Connection events array (all - these are rare)
+		payload = payload + "\"connectionEvents\":[";
+		if (m_ConnectionEvents)
+		{
+			for (int c = 0; c < m_ConnectionEvents.Count(); c++)
+			{
+				payload = payload + m_ConnectionEvents[c];
+				if (c < m_ConnectionEvents.Count() - 1)
+					payload = payload + ",";
+			}
+		}
+		payload = payload + "],";
+
+		// Combat events array
 		payload = payload + "\"combatEvents\":[";
 		if (m_CombatEvents)
 		{
-			for (int j = 0; j < m_CombatEvents.Count(); j++)
+			for (int cb = 0; cb < m_CombatEvents.Count(); cb++)
 			{
-				payload = payload + m_CombatEvents[j];
-				if (j < m_CombatEvents.Count() - 1)
+				payload = payload + m_CombatEvents[cb];
+				if (cb < m_CombatEvents.Count() - 1)
 					payload = payload + ",";
 			}
 		}
@@ -387,49 +409,94 @@ class ApiClient
 		return payload;
 	}
 
-	protected string BuildEntityBatchPayload()
+	// Clear only the items that were sent (states are limited, others are cleared fully)
+	protected void ClearSentItems(int statesSent)
 	{
-		// Get missionId from manager (null if not recording)
-		string missionPart = "null";
-		OpsTrackManager manager = OpsTrackManager.GetIfExists();
-		if (manager && manager.IsRecording())
-		{
-			UUID missionId = manager.GetCurrentMissionId();
-			if (!missionId.IsNull())
-				missionPart = "\"" + missionId + "\"";
-		}
-
-		string payload = "{\"missionId\":" + missionPart + ",\"entities\":[";
-
-		if (m_Entities)
-		{
-			for (int i = 0; i < m_Entities.Count(); i++)
-			{
-				payload = payload + m_Entities[i];
-				if (i < m_Entities.Count() - 1)
-					payload = payload + ",";
-			}
-		}
-
-		payload = payload + "]}";
-
-		return payload;
-	}
-
-	// Called by callback on error - triggers backoff
-	void Backoff()
-	{
-		m_ApiEnabled = false;
-		m_NextRetryTick = System.GetTickCount() + COOLDOWN_MS;
-
-		OpsTrackLogger.Warn(string.Format("API backoff triggered. Will retry in %1 seconds.", COOLDOWN_MS / 1000));
-
-		// Drop pending data during backoff
+		// Clear all non-state queues (they're always sent in full)
 		if (m_ConnectionEvents)
 			m_ConnectionEvents.Clear();
 		if (m_CombatEvents)
 			m_CombatEvents.Clear();
 		if (m_Entities)
 			m_Entities.Clear();
+		if (m_EntityAssignments)
+			m_EntityAssignments.Clear();
+
+		// Remove only the states that were sent (first N items)
+		if (m_EntityStates && statesSent > 0)
+		{
+			// Remove from front of array
+			for (int i = 0; i < statesSent && m_EntityStates.Count() > 0; i++)
+			{
+				m_EntityStates.Remove(0);
+			}
+		}
+	}
+
+	protected void ClearAllQueues()
+	{
+		if (m_ConnectionEvents)
+			m_ConnectionEvents.Clear();
+		if (m_CombatEvents)
+			m_CombatEvents.Clear();
+		if (m_Entities)
+			m_Entities.Clear();
+		if (m_EntityStates)
+			m_EntityStates.Clear();
+		if (m_EntityAssignments)
+			m_EntityAssignments.Clear();
+	}
+
+	// ============================================
+	// HELPER METHODS
+	// ============================================
+
+	protected bool CanSend()
+	{
+		if (!m_ApiEnabled)
+		{
+			int now = System.GetTickCount();
+			if (now < m_NextRetryTick)
+				return false;
+
+			m_ApiEnabled = true;
+			OpsTrackLogger.Info("API re-enabled after cooldown");
+		}
+		return true;
+	}
+
+	int GetTotalPendingCount()
+	{
+		int count = 0;
+		if (m_ConnectionEvents)
+			count = count + m_ConnectionEvents.Count();
+		if (m_CombatEvents)
+			count = count + m_CombatEvents.Count();
+		if (m_Entities)
+			count = count + m_Entities.Count();
+		if (m_EntityStates)
+			count = count + m_EntityStates.Count();
+		if (m_EntityAssignments)
+			count = count + m_EntityAssignments.Count();
+		return count;
+	}
+
+	// Called when request completes successfully
+	void OnRequestComplete()
+	{
+		m_HasPendingRequest = false;
+	}
+
+	// Called by callback on error - triggers backoff
+	void Backoff()
+	{
+		m_ApiEnabled = false;
+		m_HasPendingRequest = false;
+		m_NextRetryTick = System.GetTickCount() + COOLDOWN_MS;
+
+		OpsTrackLogger.Warn(string.Format("API backoff triggered. Will retry in %1 seconds.", COOLDOWN_MS / 1000));
+
+		// Drop pending data during backoff to prevent memory buildup
+		ClearAllQueues();
 	}
 }

@@ -9,7 +9,6 @@ class OpsTrackManager
 	private static ref OpsTrack_EntityManager m_EntityManager;
 	
 	private const string SETTINGS_PATH = "$profile:OpsTrackSettings.json";
-	private static bool s_Initialized = false;
 	
 	// Recording state
 	private bool m_IsRecording;
@@ -25,21 +24,40 @@ class OpsTrackManager
 	}
 
 	// Main accessor - creates instance if needed
+	// NOTE: Static references can persist across Workbench reloads but become invalid.
+	// We must check and recreate them each time.
 	static OpsTrackManager Get()
 	{
-		if (!s_Instance)
+		// Always create fresh instance on first call after reload
+		// The static ref may exist but point to garbage after Workbench reload
+		if (!s_Instance || !s_Instance.m_Settings)
 		{
 			s_Instance = new OpsTrackManager();
+			s_Instance.LoadOrCreate();
 
-			if (!s_Initialized)
-			{
-				s_Instance.LoadOrCreate();
-				m_ApiClient = new ApiClient();
-				m_EntityManager = OpsTrack_EntityManager.Get();
-				OpsTrackLogger.Info("OpsTrack Manager initialized on server.");
-				s_Initialized = true;
-			}
+			// Also clear stale static refs
+			m_ApiClient = null;
+			m_EntityManager = null;
+
+			OpsTrackLogger.Info("OpsTrack Manager initialized on server.");
 		}
+
+		// Ensure ApiClient exists
+		if (!m_ApiClient)
+		{
+			OpsTrackLogger.Info("Creating ApiClient...");
+			m_ApiClient = new ApiClient();
+
+			if (!m_ApiClient)
+				OpsTrackLogger.Error("Failed to create ApiClient!");
+		}
+
+		// Ensure EntityManager exists
+		if (!m_EntityManager)
+		{
+			m_EntityManager = OpsTrack_EntityManager.Get();
+		}
+
 		return s_Instance;
 	}
 	
@@ -134,20 +152,13 @@ class OpsTrackManager
 		if (entityIds.Count() == 0)
 			return;
 
-		// Build JSON payload: {"missionId":"...", "entityIds":["...", "..."]}
-		string payload = string.Format("{\"missionId\":\"%1\",\"entityIds\":[", m_CurrentMissionId);
-
-		for (int i = 0; i < entityIds.Count(); i++)
+		// Queue each entity assignment (ApiClient handles batching)
+		foreach (UUID entityId : entityIds)
 		{
-			payload += "\"" + entityIds[i] + "\"";
-			if (i < entityIds.Count() - 1)
-				payload += ",";
+			m_ApiClient.EnqueueEntityAssignment(string.Format("%1", entityId));
 		}
 
-		payload += "]}";
-
-		m_ApiClient.AssignEntitiesToMission(payload);
-		OpsTrackLogger.Info(string.Format("Assigning %1 existing entities to mission", entityIds.Count()));
+		OpsTrackLogger.Info(string.Format("Queued %1 existing entities for mission assignment", entityIds.Count()));
 	}
 
 	// Stop recording - called from command

@@ -20,16 +20,20 @@ class OpsTrackCallback : RestCallback
 		if (!cb)
 		{
 			OpsTrackLogger.Warn("OnSuccessHandler: callback is null");
+			NotifyComplete();
 			return;
 		}
-		
+
 		int httpCode = cb.GetHttpCode();
 		string data = cb.GetData();
-		
+
 		OpsTrackLogger.Info(string.Format("REST request succeeded. HTTP %1", httpCode));
-		
+
 		if (data && data != "")
 			OpsTrackLogger.Debug(string.Format("REST response: %1", data));
+
+		// Notify ApiClient that request is complete (allows next request to be sent)
+		NotifyComplete();
 	}
 	
 	// Called on error
@@ -72,6 +76,8 @@ class OpsTrackCallback : RestCallback
 		else
 		{
 			OpsTrackLogger.Warn(string.Format("HTTP %1 - not triggering backoff (client error)", httpCode));
+			// Still need to notify complete so we can continue sending requests
+			NotifyComplete();
 		}
 	}
 	
@@ -81,5 +87,11 @@ class OpsTrackCallback : RestCallback
 			m_Client.Backoff();
 		else
 			OpsTrackLogger.Warn("Cannot trigger backoff: ApiClient reference is null");
+	}
+
+	protected void NotifyComplete()
+	{
+		if (m_Client)
+			m_Client.OnRequestComplete();
 	}
 }

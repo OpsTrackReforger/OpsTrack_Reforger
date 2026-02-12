@@ -5,40 +5,66 @@ class OpsTrack_StateTracker
 {
 	private static ref OpsTrack_StateTracker s_Instance;
 
-	private ref array<string> m_PendingStates;
 	private bool m_IsTracking;
 	private int m_UpdateIntervalMs;
 
-	private static const int DEFAULT_UPDATE_INTERVAL_MS = 1000; // 1 second
-	private static const int MAX_BATCH_SIZE = 50;
+	private static const int DEFAULT_UPDATE_INTERVAL_MS = 1000; // 1 second - capture positions every second
+	// Note: We no longer batch in StateTracker - ApiClient handles all batching via unified flush
 
 	private void OpsTrack_StateTracker()
 	{
-		m_PendingStates = new array<string>();
 		m_IsTracking = false;
 		m_UpdateIntervalMs = DEFAULT_UPDATE_INTERVAL_MS;
 	}
 
 	static OpsTrack_StateTracker Get()
 	{
+		// Always create fresh instance - static refs become stale after Workbench reload
 		if (!s_Instance)
+		{
 			s_Instance = new OpsTrack_StateTracker();
+			OpsTrackLogger.Info("StateTracker instance created");
+		}
 		return s_Instance;
+	}
+
+	// Reset static instance (call on game reload)
+	static void Reset()
+	{
+		s_Instance = null;
 	}
 
 	// Start tracking (called when recording starts)
 	void StartTracking()
 	{
 		if (m_IsTracking)
+		{
+			OpsTrackLogger.Warn("StartTracking called but already tracking");
 			return;
+		}
 
 		m_IsTracking = true;
-
-		// Start periodic position capture
-		if (GetGame() && GetGame().GetCallqueue())
-			GetGame().GetCallqueue().CallLater(CaptureAllPositions, m_UpdateIntervalMs, true);
-
 		OpsTrackLogger.Info("EntityState tracking started");
+
+		// Schedule first position capture (one-shot, will reschedule itself)
+		ScheduleNextCapture();
+	}
+
+	// Schedule the next position capture (one-shot callback that reschedules itself)
+	protected void ScheduleNextCapture()
+	{
+		if (!m_IsTracking)
+			return;
+
+		if (GetGame() && GetGame().GetCallqueue())
+		{
+			// Use one-shot callback (false = non-repeating) - this works reliably in Enfusion
+			GetGame().GetCallqueue().CallLater(CaptureAllPositions, m_UpdateIntervalMs, false);
+		}
+		else
+		{
+			OpsTrackLogger.Error("Cannot schedule capture: GetCallqueue() returned null!");
+		}
 	}
 
 	// Stop tracking (called when recording stops)
@@ -49,11 +75,14 @@ class OpsTrack_StateTracker
 
 		m_IsTracking = false;
 
-		// Flush any remaining states
-		FlushStates();
-
-		// Clear pending states
-		m_PendingStates.Clear();
+		// Force flush any remaining states before stopping
+		OpsTrackManager manager = OpsTrackManager.GetIfExists();
+		if (manager)
+		{
+			ApiClient api = manager.GetApiClient();
+			if (api)
+				api.ForceFlush();
+		}
 
 		OpsTrackLogger.Info("EntityState tracking stopped");
 	}
@@ -66,6 +95,10 @@ class OpsTrack_StateTracker
 	// Capture positions of all tracked entities
 	protected void CaptureAllPositions()
 	{
+		// Reschedule next capture FIRST (ensures continuous operation even if we return early)
+		if (m_IsTracking)
+			ScheduleNextCapture();
+
 		if (!m_IsTracking)
 			return;
 
@@ -110,19 +143,12 @@ class OpsTrack_StateTracker
 
 				entityId = entityMgr.GetOrCreatePlayerEntity(playerId, playerName, factionName);
 
-				// Entity needs to be assigned to current mission
+				// Queue entity assignment to current mission (ApiClient handles batching)
 				if (!entityId.IsNull() && manager.IsRecording())
 				{
 					ApiClient api = manager.GetApiClient();
 					if (api)
-					{
-						string assignPayload = string.Format(
-							"{\"missionId\":\"%1\",\"entityIds\":[\"%2\"]}",
-							manager.GetCurrentMissionId(),
-							entityId
-						);
-						api.AssignEntitiesToMission(assignPayload);
-					}
+						api.EnqueueEntityAssignment(string.Format("%1", entityId));
 				}
 			}
 
@@ -150,49 +176,16 @@ class OpsTrack_StateTracker
 				isAlive
 			);
 
-			m_PendingStates.Insert(state.AsPayload());
+			// Queue state directly to ApiClient (it handles batching)
+			ApiClient api = manager.GetApiClient();
+			if (api)
+				api.EnqueueEntityState(state.AsPayload());
 		}
 
-		// Flush if we have enough states
-		if (m_PendingStates.Count() >= MAX_BATCH_SIZE)
-			FlushStates();
-	}
-
-	// Flush states to API
-	protected void FlushStates()
-	{
-		if (m_PendingStates.Count() == 0)
-			return;
-
-		OpsTrackManager manager = OpsTrackManager.GetIfExists();
-		if (!manager)
-			return;
-
+		// After capturing all positions, check if it's time to flush
 		ApiClient api = manager.GetApiClient();
-		if (!api)
-			return;
-
-		string payload = BuildBatchPayload();
-		int count = m_PendingStates.Count();
-
-		m_PendingStates.Clear();
-
-		api.SendEntityStates(payload);
-	}
-
-	protected string BuildBatchPayload()
-	{
-		string payload = "{\"states\":[";
-
-		for (int i = 0; i < m_PendingStates.Count(); i++)
-		{
-			payload += m_PendingStates[i];
-			if (i < m_PendingStates.Count() - 1)
-				payload += ",";
-		}
-
-		payload += "]}";
-		return payload;
+		if (api)
+			api.CheckAndFlush();
 	}
 
 }

@@ -35,13 +35,16 @@ class OpsTrackLogger
 		string line = string.Format("[OpsTrack][%1][%2] %3", levelStr, timestamp, msg);
 
 		// --- Console output ---
-		if (level == OpsTrackLogLevel.WARN || level == OpsTrackLogLevel.ERROR)
+		// INFO, WARN, ERROR always go to console
+		// DEBUG only in debug mode
+		if (level == OpsTrackLogLevel.DEBUG)
 		{
-			Print(line); // Always print warnings and errors
+			if (debugEnabled)
+				Print(line);
 		}
-		else if (debugEnabled)
+		else
 		{
-			Print(line); // Only in debug mode
+			Print(line); // INFO, WARN, ERROR always printed
 		}
 
 		// --- Skip INFO/DEBUG file output in normal mode ---
